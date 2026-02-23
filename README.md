@@ -4,7 +4,7 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 
 ## Features
 
-- Per-device system tray icons with color-coded battery levels (green/yellow/orange/red/empty)
+- Per-device system tray icons with battery level indicators (full, good, medium, low, empty)
 - Supports Bluetooth LE (GATT Battery Service), Bluetooth Classic (HFP via CfgMgr32), and Windows device property fallback
 - WebView2 configuration dialog for selecting which paired devices to monitor
 - Device configuration persisted in Windows Registry (`HKCU\SOFTWARE\JPIT\BluetoothBatteryMonitor`)
