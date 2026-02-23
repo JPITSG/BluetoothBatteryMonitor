@@ -1,0 +1,4 @@
+obj/
+bin/
+assets/node_modules/
+assets/dist/

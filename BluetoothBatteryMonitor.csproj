@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <RuntimeIdentifiers>win-x64;win-x86</RuntimeIdentifiers>
+    <SelfContained>false</SelfContained>
+    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <ApplicationIcon>assets\icon.ico</ApplicationIcon>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Web.WebView2" Version="1.0.2903.40" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="assets\icon_battery_empty.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_empty.ico" />
+    <EmbeddedResource Include="assets\icon_battery_full.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_full.ico" />
+    <EmbeddedResource Include="assets\icon_battery_good.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_good.ico" />
+    <EmbeddedResource Include="assets\icon_battery_medium.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_medium.ico" />
+    <EmbeddedResource Include="assets\icon_battery_low.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_low.ico" />
+    <EmbeddedResource Include="assets\dist\index.html" LogicalName="BluetoothBatteryMonitor.config_ui.html" />
+  </ItemGroup>
+
+</Project>
