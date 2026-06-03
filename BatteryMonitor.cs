@@ -24,6 +24,7 @@ namespace BluetoothBatteryMonitor
         private readonly Dictionary<string, ToolStripItem> _deviceMenuItems;
         private readonly Dictionary<string, ToolStripItem> _deviceLastUpdateMenuItems;
         private readonly System.Windows.Forms.Timer _uiRefreshTimer;
+        private System.Windows.Forms.Timer? _startupConfigurationTimer;
         private readonly System.Threading.Timer _reconnectTimer;
         private readonly System.Threading.Timer _stateVerificationTimer;
         private readonly SemaphoreSlim _deviceLock;
@@ -150,6 +151,7 @@ namespace BluetoothBatteryMonitor
 
             LoadBatteryIcons();
             InitializeDevices();
+            bool shouldShowConfigurationOnLaunch = _devices.Count == 0;
             CreateTrayIcons();
             CreateSentinelIcon();
             UpdateSentinelVisibility();
@@ -179,6 +181,11 @@ namespace BluetoothBatteryMonitor
             );
 
             ScheduleStateVerification();
+
+            if (shouldShowConfigurationOnLaunch)
+            {
+                ScheduleStartupConfigurationDialog();
+            }
         }
         #endregion
 
@@ -502,11 +509,39 @@ namespace BluetoothBatteryMonitor
 
         private void OnConfigureClick(object? sender, EventArgs e)
         {
+            ShowConfigurationDialog();
+        }
+
+        private void ShowConfigurationDialog()
+        {
             using var dialog = new ConfigurationDialog();
             if (dialog.ShowDialog() == DialogResult.OK)
             {
                 ReloadConfiguration();
             }
+        }
+
+        private void ScheduleStartupConfigurationDialog()
+        {
+            _startupConfigurationTimer = new System.Windows.Forms.Timer
+            {
+                Interval = 100
+            };
+            _startupConfigurationTimer.Tick += OnStartupConfigurationTimerTick;
+            _startupConfigurationTimer.Start();
+        }
+
+        private void OnStartupConfigurationTimerTick(object? sender, EventArgs e)
+        {
+            if (_startupConfigurationTimer != null)
+            {
+                _startupConfigurationTimer.Stop();
+                _startupConfigurationTimer.Tick -= OnStartupConfigurationTimerTick;
+                _startupConfigurationTimer.Dispose();
+                _startupConfigurationTimer = null;
+            }
+
+            ShowConfigurationDialog();
         }
 
         private void ReloadConfiguration()
@@ -1231,6 +1266,14 @@ namespace BluetoothBatteryMonitor
                 _notificationWindow?.Dispose();
 
                 StopDeviceWatchers();
+
+                if (_startupConfigurationTimer != null)
+                {
+                    _startupConfigurationTimer.Stop();
+                    _startupConfigurationTimer.Tick -= OnStartupConfigurationTimerTick;
+                    _startupConfigurationTimer.Dispose();
+                    _startupConfigurationTimer = null;
+                }
 
                 foreach (var device in _devices.Values)
                 {

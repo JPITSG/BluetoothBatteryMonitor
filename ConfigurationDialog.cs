@@ -15,14 +15,18 @@ namespace BluetoothBatteryMonitor
 {
     public class ConfigurationDialog : Form
     {
+        private const int DialogClientWidth = 420;
+        private const int InitialClientHeight = 180;
+        private const int MinimumClientHeight = 130;
+        private const int ScreenPadding = 64;
+
         private WebView2? _webView;
         private string? _htmlContent;
 
         public ConfigurationDialog()
         {
             Text = "Configuration";
-            Width = 420;
-            Height = 0;
+            ClientSize = new System.Drawing.Size(DialogClientWidth, InitialClientHeight);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterScreen;
             ShowInTaskbar = false;
@@ -113,9 +117,7 @@ namespace BluetoothBatteryMonitor
                     case "resize":
                         if (json.RootElement.TryGetProperty("height", out var heightProp))
                         {
-                            int contentHeight = heightProp.GetInt32();
-                            int chromeHeight = Height - ClientSize.Height;
-                            Height = contentHeight + chromeHeight;
+                            ResizeToContent(heightProp.GetInt32());
 
                             if (Opacity == 0)
                             {
@@ -127,6 +129,52 @@ namespace BluetoothBatteryMonitor
                 }
             }
             catch { }
+        }
+
+        protected override void OnHandleCreated(EventArgs e)
+        {
+            base.OnHandleCreated(e);
+            ResizeClientArea(InitialClientHeight);
+        }
+
+        private void ResizeToContent(int contentHeight)
+        {
+            ResizeClientArea(Math.Max(contentHeight, MinimumClientHeight));
+        }
+
+        private void ResizeClientArea(int logicalClientHeight)
+        {
+            var clientSize = new System.Drawing.Size(
+                ScaleLogicalPixels(DialogClientWidth),
+                ScaleLogicalPixels(ClampLogicalClientHeight(logicalClientHeight))
+            );
+
+            ClientSize = clientSize;
+            MinimumSize = SizeFromClientSize(new System.Drawing.Size(
+                clientSize.Width,
+                ScaleLogicalPixels(MinimumClientHeight)
+            ));
+        }
+
+        private int ClampLogicalClientHeight(int logicalClientHeight)
+        {
+            var scale = GetDpiScale();
+            var workingArea = Screen.FromControl(this).WorkingArea;
+            int verticalChrome = Math.Max(0, Height - ClientSize.Height);
+            int maxDeviceClientHeight = workingArea.Height - verticalChrome - ScaleLogicalPixels(ScreenPadding);
+            int maxLogicalClientHeight = (int)Math.Floor(maxDeviceClientHeight / scale);
+
+            return Math.Max(MinimumClientHeight, Math.Min(logicalClientHeight, maxLogicalClientHeight));
+        }
+
+        private int ScaleLogicalPixels(int value)
+        {
+            return (int)Math.Ceiling(value * GetDpiScale());
+        }
+
+        private double GetDpiScale()
+        {
+            return DeviceDpi > 0 ? DeviceDpi / 96.0 : 1.0;
         }
 
         private async Task HandleGetInitAsync()

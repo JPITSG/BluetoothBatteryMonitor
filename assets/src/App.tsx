@@ -15,15 +15,33 @@ export default function App() {
     const el = containerRef.current;
     if (!el || !initData) return;
 
+    const getContentHeight = () =>
+      Math.max(
+        el.scrollHeight,
+        document.documentElement.scrollHeight,
+        document.body?.scrollHeight ?? 0
+      );
+
     const report = () => {
-      reportHeight(Math.ceil(el.scrollHeight));
+      reportHeight(Math.ceil(getContentHeight()));
     };
 
     requestAnimationFrame(report);
+    const settlingReports = [
+      window.setTimeout(report, 50),
+      window.setTimeout(report, 250),
+    ];
 
     const observer = new ResizeObserver(report);
     observer.observe(el);
-    return () => observer.disconnect();
+    if (document.body) {
+      observer.observe(document.body);
+    }
+
+    return () => {
+      observer.disconnect();
+      settlingReports.forEach((timerId) => window.clearTimeout(timerId));
+    };
   }, [initData]);
 
   if (!initData) return null;
