@@ -233,17 +233,25 @@ namespace BluetoothBatteryMonitor
 
         private async Task HandleSessionReconnectAsync()
         {
+            var uiRefreshComplete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
             _syncContext.Post(_ =>
             {
                 try
                 {
                     RefreshTrayIconsForDpiChange();
                     CaptureCurrentDisplaySettings();
+                    RestartDeviceWatchers();
                 }
                 catch { }
+                finally
+                {
+                    uiRefreshComplete.TrySetResult();
+                }
             }, null);
-            
-            await Task.CompletedTask.ConfigureAwait(false);
+
+            await uiRefreshComplete.Task.ConfigureAwait(false);
+            await VerifyDeviceStatesAsync().ConfigureAwait(false);
         }
 
         private void RefreshTrayIconsForDpiChange()
@@ -266,9 +274,11 @@ namespace BluetoothBatteryMonitor
 
                 try
                 {
-                    var batteryIcon = GetBatteryIcon(deviceInfo.BatteryLevel);
+                    var batteryIcon = GetBatteryIcon(deviceInfo.IsConnected ? deviceInfo.BatteryLevel : null);
                     _deviceCurrentIcons[deviceName] = batteryIcon;
                     notifyIcon.Icon = batteryIcon;
+                    UpdateTrayIconText(deviceName, deviceInfo);
+                    UpdateContextMenuItems(deviceName);
                 }
                 catch { }
             }
@@ -617,6 +627,15 @@ namespace BluetoothBatteryMonitor
                 _classicDeviceWatcher.Start();
             }
             catch { }
+        }
+
+        private void RestartDeviceWatchers()
+        {
+            if (_disposeCts.IsCancellationRequested)
+                return;
+
+            StopDeviceWatchers();
+            InitializeDeviceWatcher();
         }
 
         private async void OnDeviceAdded(DeviceWatcher sender, DeviceInformation args)
@@ -1191,21 +1210,31 @@ namespace BluetoothBatteryMonitor
                 foreach (var kvp in _devices.ToArray())
                 {
                     var deviceName = kvp.Key;
-                    bool isCurrentlyConnected = kvp.Value.IsConnected;
+                    var deviceInfo = kvp.Value;
+                    bool isCurrentlyConnected = deviceInfo.IsConnected;
                     bool isActuallyConnected = connectedByName.ContainsKey(deviceName);
 
-                    if (isActuallyConnected && !isCurrentlyConnected)
+                    if (isActuallyConnected)
                     {
                         if (connectedByName.TryGetValue(deviceName, out var connectedDeviceInfo))
-                            _ = ProcessDeviceAsync(connectedDeviceInfo);
+                        {
+                            bool needsRefresh = !isCurrentlyConnected ||
+                                                !deviceInfo.BatteryLevel.HasValue ||
+                                                string.IsNullOrEmpty(deviceInfo.DeviceId);
+
+                            if (needsRefresh)
+                            {
+                                await ProcessDeviceAsync(connectedDeviceInfo).ConfigureAwait(false);
+                            }
+                            else if (deviceInfo.ConnectionType == DeviceConnectionType.BluetoothClassic)
+                            {
+                                await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
+                            }
+                        }
                     }
                     else if (!isActuallyConnected && isCurrentlyConnected)
                     {
                         HandleDeviceDisconnected(deviceName);
-                    }
-                    else if (isActuallyConnected && kvp.Value.ConnectionType == DeviceConnectionType.BluetoothClassic)
-                    {
-                        await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
                     }
                 }
             }
@@ -1218,7 +1247,7 @@ namespace BluetoothBatteryMonitor
 
         private async Task RetryDisconnectedDevicesAsync()
         {
-            await Task.CompletedTask.ConfigureAwait(false);
+            await VerifyDeviceStatesAsync().ConfigureAwait(false);
         }
         #endregion
 
