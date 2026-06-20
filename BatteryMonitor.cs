@@ -57,6 +57,7 @@ namespace BluetoothBatteryMonitor
 
         private const string RegistryKeyPath = @"SOFTWARE\JPIT\BluetoothBatteryMonitor";
         private const string RegistryDevicesValue = "Devices";
+        internal const string ShowConfigurationEventName = @"Global\BluetoothBatteryMonitor_ShowConfig";
 
         private static readonly Guid BatteryServiceUuid = new("0000180f-0000-1000-8000-00805f9b34fb");
         private static readonly Guid BatteryLevelUuid = new("00002a19-0000-1000-8000-00805f9b34fb");
@@ -130,10 +131,16 @@ namespace BluetoothBatteryMonitor
         
         // Hidden window for receiving session notifications
         private SessionNotificationWindow? _notificationWindow;
+
+        // Cross-instance trigger so a second launch with the /configure switch
+        // can ask the already-running instance to open its configuration dialog.
+        private EventWaitHandle? _showConfigEvent;
+        private RegisteredWaitHandle? _showConfigWaitHandle;
+        private bool _configurationDialogOpen;
         #endregion
 
         #region Constructor and Initialization
-        public BatteryMonitor()
+        public BatteryMonitor(bool forceConfiguration = false)
         {
             _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             _disposeCts = new CancellationTokenSource();
@@ -151,7 +158,7 @@ namespace BluetoothBatteryMonitor
 
             LoadBatteryIcons();
             InitializeDevices();
-            bool shouldShowConfigurationOnLaunch = _devices.Count == 0;
+            bool shouldShowConfigurationOnLaunch = forceConfiguration || _devices.Count == 0;
             CreateTrayIcons();
             CreateSentinelIcon();
             UpdateSentinelVisibility();
@@ -181,6 +188,8 @@ namespace BluetoothBatteryMonitor
             );
 
             ScheduleStateVerification();
+
+            InitializeConfigurationTrigger();
 
             if (shouldShowConfigurationOnLaunch)
             {
@@ -274,9 +283,7 @@ namespace BluetoothBatteryMonitor
 
                 try
                 {
-                    var batteryIcon = GetBatteryIcon(deviceInfo.IsConnected ? deviceInfo.BatteryLevel : null);
-                    _deviceCurrentIcons[deviceName] = batteryIcon;
-                    notifyIcon.Icon = batteryIcon;
+                    ApplyDeviceIconState(deviceName, deviceInfo, notifyIcon);
                     UpdateTrayIconText(deviceName, deviceInfo);
                     UpdateContextMenuItems(deviceName);
                 }
@@ -309,6 +316,7 @@ namespace BluetoothBatteryMonitor
 
             var lastUpdatedItem = contextMenu.Items.Add(FormatLastUpdateText(deviceInfo), null, null);
             lastUpdatedItem.Enabled = false;
+            lastUpdatedItem.Available = deviceInfo.LastUpdate.HasValue;
             _deviceLastUpdateMenuItems[deviceName] = lastUpdatedItem;
 
             contextMenu.Opening += (_, _) => UpdateContextMenuItems(deviceName);
@@ -429,6 +437,21 @@ namespace BluetoothBatteryMonitor
                 _ => _iconEmpty ?? CreateFallbackIcon()
             };
         }
+
+        // Disconnected devices are hidden from the tray entirely; connected
+        // devices show their battery-level icon.
+        private void ApplyDeviceIconState(string deviceName, DeviceInfo deviceInfo, NotifyIcon icon)
+        {
+            var batteryIcon = GetBatteryIcon(deviceInfo.BatteryLevel);
+            _deviceCurrentIcons[deviceName] = batteryIcon;
+
+            if (icon.Icon != batteryIcon)
+                icon.Icon = batteryIcon;
+
+            bool shouldBeVisible = deviceInfo.IsConnected;
+            if (icon.Visible != shouldBeVisible)
+                icon.Visible = shouldBeVisible;
+        }
         #endregion
 
         #region Device Management
@@ -468,8 +491,8 @@ namespace BluetoothBatteryMonitor
                 
                 var notifyIcon = new NotifyIcon
                 {
-                    Icon = GetBatteryIcon(null),
-                    Visible = true,
+                    Icon = GetBatteryIcon(deviceInfo.BatteryLevel),
+                    Visible = deviceInfo.IsConnected,
                     Text = $"{deviceName}\nScanning..."
                 };
 
@@ -486,7 +509,7 @@ namespace BluetoothBatteryMonitor
             _sentinelIcon = new NotifyIcon
             {
                 Icon = _iconEmpty ?? CreateFallbackIcon(),
-                Text = "Bluetooth Battery Monitor\nNo devices"
+                Text = "Bluetooth Battery Monitor\nNo devices connected"
             };
             _sentinelIcon.DoubleClick += OnConfigureClick;
 
@@ -501,7 +524,20 @@ namespace BluetoothBatteryMonitor
         {
             if (_sentinelIcon == null) return;
 
-            _sentinelIcon.Visible = _trayIcons.Count == 0;
+            // Keep a tray presence (for Configuration/Exit access) whenever no
+            // device icon is currently visible - i.e. no devices are configured
+            // or every configured device is disconnected.
+            bool anyDeviceIconVisible = false;
+            foreach (var icon in _trayIcons.Values)
+            {
+                if (icon.Visible)
+                {
+                    anyDeviceIconVisible = true;
+                    break;
+                }
+            }
+
+            _sentinelIcon.Visible = !anyDeviceIconVisible;
         }
 
         private void OnOpenBluetoothSettings(object? sender, EventArgs e)
@@ -524,11 +560,40 @@ namespace BluetoothBatteryMonitor
 
         private void ShowConfigurationDialog()
         {
-            using var dialog = new ConfigurationDialog();
-            if (dialog.ShowDialog() == DialogResult.OK)
+            if (_configurationDialogOpen)
+                return;
+
+            _configurationDialogOpen = true;
+            try
             {
-                ReloadConfiguration();
+                using var dialog = new ConfigurationDialog();
+                if (dialog.ShowDialog() == DialogResult.OK)
+                {
+                    ReloadConfiguration();
+                }
             }
+            finally
+            {
+                _configurationDialogOpen = false;
+            }
+        }
+
+        // Creates a named event so that launching the app again with the
+        // /configure switch (which exits immediately due to the single-instance
+        // mutex) can signal this running instance to open the dialog.
+        private void InitializeConfigurationTrigger()
+        {
+            try
+            {
+                _showConfigEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowConfigurationEventName);
+                _showConfigWaitHandle = ThreadPool.RegisterWaitForSingleObject(
+                    _showConfigEvent,
+                    (_, _) => _syncContext.Post(_ => ShowConfigurationDialog(), null),
+                    null,
+                    Timeout.Infinite,
+                    false);
+            }
+            catch { }
         }
 
         private void ScheduleStartupConfigurationDialog()
@@ -1004,11 +1069,7 @@ namespace BluetoothBatteryMonitor
 
             try
             {
-                var batteryIcon = GetBatteryIcon(deviceInfo.IsConnected ? deviceInfo.BatteryLevel : null);
-                _deviceCurrentIcons[deviceName] = batteryIcon;
-
-                if (icon.Icon != batteryIcon)
-                    icon.Icon = batteryIcon;
+                ApplyDeviceIconState(deviceName, deviceInfo, icon);
 
                 UpdateTrayIconText(deviceName, deviceInfo);
                 UpdateContextMenuItems(deviceName);
@@ -1036,6 +1097,7 @@ namespace BluetoothBatteryMonitor
                     !lastUpdateItem.IsDisposed &&
                     (lastUpdateItem.Owner == null || !lastUpdateItem.Owner.IsDisposed))
                 {
+                    lastUpdateItem.Available = deviceInfo.LastUpdate.HasValue;
                     lastUpdateItem.Text = FormatLastUpdateText(deviceInfo);
                 }
             }
@@ -1084,8 +1146,9 @@ namespace BluetoothBatteryMonitor
         private static string BuildNotifyIconText(string deviceName, DeviceInfo deviceInfo)
         {
             string statusText = GetStatusText(deviceInfo);
-            string updateText = FormatLastUpdateShortText(deviceInfo);
-            string tooltipText = $"{deviceName}\n{statusText}\n{updateText}";
+            string tooltipText = deviceInfo.LastUpdate.HasValue
+                ? $"{deviceName}\n{statusText}\n{FormatLastUpdateShortText(deviceInfo)}"
+                : $"{deviceName}\n{statusText}";
             return TruncateNotifyIconText(tooltipText);
         }
 
@@ -1294,6 +1357,9 @@ namespace BluetoothBatteryMonitor
 
                 _notificationWindow?.Dispose();
 
+                _showConfigWaitHandle?.Unregister(null);
+                _showConfigEvent?.Dispose();
+
                 StopDeviceWatchers();
 
                 if (_startupConfigurationTimer != null)
@@ -1360,7 +1426,7 @@ namespace BluetoothBatteryMonitor
                 _iconMedium?.Dispose();
                 _iconLow?.Dispose();
                 _iconEmpty?.Dispose();
-                
+
                 _deviceLock.Dispose();
                 _disposeCts.Dispose();
                 

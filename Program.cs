@@ -25,13 +25,20 @@ namespace BluetoothBatteryMonitor
                 return;
             }
 
+            bool configure = HasConfigureFlag(args);
+
             // Single instance check
             const string mutexName = "Global\\BluetoothBatteryMonitor_SingleInstance";
             _mutex = new Mutex(true, mutexName, out bool createdNew);
-            
+
             if (!createdNew)
             {
-                // Another instance is already running
+                // Another instance is already running. If we were launched with
+                // /configure, ask that instance to open its configuration dialog.
+                if (configure)
+                {
+                    SignalShowConfiguration();
+                }
                 return;
             }
 
@@ -44,7 +51,7 @@ namespace BluetoothBatteryMonitor
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
-                using var monitor = new BatteryMonitor();
+                using var monitor = new BatteryMonitor(configure);
                 Application.Run(monitor);
             }
             finally
@@ -61,6 +68,29 @@ namespace BluetoothBatteryMonitor
                 var trimmed = arg.TrimStart('-', '/');
                 return string.Equals(trimmed, "listdevices", StringComparison.OrdinalIgnoreCase);
             });
+        }
+
+        private static bool HasConfigureFlag(string[] args)
+        {
+            return args.Any(arg =>
+            {
+                var trimmed = arg.TrimStart('-', '/');
+                return string.Equals(trimmed, "configure", StringComparison.OrdinalIgnoreCase);
+            });
+        }
+
+        private static void SignalShowConfiguration()
+        {
+            try
+            {
+                using var evt = EventWaitHandle.OpenExisting(BatteryMonitor.ShowConfigurationEventName);
+                evt.Set();
+            }
+            catch
+            {
+                // The running instance may predate this feature or the event may
+                // be unavailable; nothing more we can do from here.
+            }
         }
 
         private static async Task ShowDeviceListAndExitAsync()
