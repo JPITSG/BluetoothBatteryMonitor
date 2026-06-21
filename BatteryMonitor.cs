@@ -290,6 +290,17 @@ namespace BluetoothBatteryMonitor
                 catch { }
             }
 
+            // The sentinel shares _iconEmpty; repoint it at the freshly loaded
+            // icon before the old one is disposed. Otherwise it keeps a reference
+            // to a disposed Icon, which throws ObjectDisposedException when
+            // Windows rebuilds the tray (e.g. resuming from hibernation or
+            // restarting Explorer) and NotifyIcon re-reads its icon handle.
+            if (_sentinelIcon != null)
+            {
+                try { _sentinelIcon.Icon = _iconEmpty ?? CreateFallbackIcon(); }
+                catch { }
+            }
+
             try
             {
                 oldIconFull?.Dispose();
