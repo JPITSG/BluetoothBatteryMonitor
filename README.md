@@ -61,7 +61,7 @@ handoff still require Windows verification.
 
 ## Updates
 
-Version: **1.0.12**.
+Version: **1.0.13**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

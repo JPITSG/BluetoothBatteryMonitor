@@ -45,7 +45,7 @@ namespace BluetoothBatteryMonitor
             ClientSize = new System.Drawing.Size(DialogClientWidth, InitialClientHeight);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             StartPosition = FormStartPosition.CenterScreen;
-            ShowInTaskbar = false;
+            ShowInTaskbar = true;
             MaximizeBox = false;
             MinimizeBox = false;
             Opacity = 0;
