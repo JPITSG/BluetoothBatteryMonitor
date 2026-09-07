@@ -47,7 +47,7 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
                   <Checkbox checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
                   <span className="min-w-0 break-words leading-4">{device.name}{status && (
                     <span className={status.online ? "text-green-700" : "text-neutral-500"}>
-                      {status.online ? ` · Online · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Offline"}
+                      {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
                   )}</span>
                 </label>
