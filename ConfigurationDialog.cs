@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
 using Microsoft.Web.WebView2.Core;
@@ -21,7 +22,18 @@ namespace BluetoothBatteryMonitor
         private const int ScreenPadding = 64;
 
         private WebView2? _webView;
-        private string? _htmlContent;
+        private System.Drawing.Icon? _dialogIcon;
+        private bool _initialized;
+        private readonly CancellationTokenSource _lifetime = new();
+        private static Task<CoreWebView2Environment>? _environment;
+        private static List<string> _cachedPairedNames = new();
+        private static readonly Lazy<string> HtmlContent = new(() =>
+        {
+            using var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("BluetoothBatteryMonitor.config_ui.html")
+                ?? throw new InvalidOperationException("The configuration page is missing.");
+            using var reader = new StreamReader(stream);
+            return reader.ReadToEnd();
+        });
 
         public ConfigurationDialog()
         {
@@ -33,34 +45,21 @@ namespace BluetoothBatteryMonitor
             MaximizeBox = false;
             MinimizeBox = false;
             Opacity = 0;
-            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+            // Load the small embedded icon instead of inspecting the bundled EXE
+            // on the UI thread every time configuration opens.
+            using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("BluetoothBatteryMonitor.icon.ico"))
+            {
+                if (stream != null) Icon = _dialogIcon = new System.Drawing.Icon(stream);
+            }
 
             AppUpdater.Instance.Changed += SendUpdateState;
-            LoadEmbeddedHtml();
             InitializeWebView();
-        }
-
-        private void LoadEmbeddedHtml()
-        {
-            try
-            {
-                var assembly = Assembly.GetExecutingAssembly();
-                using var stream = assembly.GetManifestResourceStream("BluetoothBatteryMonitor.config_ui.html");
-                if (stream != null)
-                {
-                    using var reader = new StreamReader(stream);
-                    _htmlContent = reader.ReadToEnd();
-                }
-            }
-            catch { }
         }
 
         private void InitializeWebView()
         {
             _webView = new WebView2 { Dock = DockStyle.Fill };
             Controls.Add(_webView);
-
-            _webView.CoreWebView2InitializationCompleted += OnWebViewReady;
             _ = InitWebViewAsync();
         }
 
@@ -68,27 +67,32 @@ namespace BluetoothBatteryMonitor
         {
             try
             {
-                var userDataFolder = Path.Combine(Path.GetTempPath(), "BluetoothBatteryMonitor", "WebView2");
-                var env = await CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                var html = Task.Run(() => HtmlContent.Value);
+                // Reuse the environment/profile between dialog openings. A failed
+                // runtime startup may be retried on the next opening.
+                if (_environment == null || _environment.IsFaulted || _environment.IsCanceled)
+                {
+                    var userDataFolder = Path.Combine(Path.GetTempPath(), "BluetoothBatteryMonitor", "WebView2");
+                    _environment = CoreWebView2Environment.CreateAsync(null, userDataFolder);
+                }
+                var env = await _environment;
+                if (_lifetime.IsCancellationRequested) return;
                 await _webView!.EnsureCoreWebView2Async(env);
+                var content = await html;
+                if (_lifetime.IsCancellationRequested) return;
+
+                var core = _webView.CoreWebView2;
+                core.Settings.AreDevToolsEnabled = false;
+                core.Settings.AreDefaultContextMenusEnabled = false;
+                core.Settings.IsStatusBarEnabled = false;
+                core.WebMessageReceived += OnWebMessageReceived;
+                core.NavigateToString(content);
             }
-            catch { }
-        }
-
-        private void OnWebViewReady(object? sender, CoreWebView2InitializationCompletedEventArgs e)
-        {
-            if (!e.IsSuccess || _webView?.CoreWebView2 == null) return;
-
-            var settings = _webView.CoreWebView2.Settings;
-            settings.AreDevToolsEnabled = false;
-            settings.AreDefaultContextMenusEnabled = false;
-            settings.IsStatusBarEnabled = false;
-
-            _webView.CoreWebView2.WebMessageReceived += OnWebMessageReceived;
-
-            if (_htmlContent != null)
+            catch (Exception ex)
             {
-                _webView.CoreWebView2.NavigateToString(_htmlContent);
+                if (IsDisposed || _lifetime.IsCancellationRequested) return;
+                MessageBox.Show("Could not open configuration.\n" + ex.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Error);
+                Close();
             }
         }
 
@@ -97,13 +101,13 @@ namespace BluetoothBatteryMonitor
             try
             {
                 var raw = e.TryGetWebMessageAsString();
-                var json = JsonDocument.Parse(raw);
+                using var json = JsonDocument.Parse(raw);
                 var action = json.RootElement.GetProperty("action").GetString();
 
                 switch (action)
                 {
                     case "getInit":
-                        await HandleGetInitAsync();
+                        HandleGetInit();
                         break;
 
                     case "dismissUpdate":
@@ -119,7 +123,7 @@ namespace BluetoothBatteryMonitor
                         AppUpdater.Instance.Cancel();
                         break;
                     case "installUpdate":
-                        AppUpdater.Instance.Install();
+                        await AppUpdater.Instance.InstallAsync();
                         break;
                     case "ignoreUpdate":
                         AppUpdater.Instance.Ignore();
@@ -162,7 +166,17 @@ namespace BluetoothBatteryMonitor
 
         private void ResizeToContent(int contentHeight)
         {
+            var bounds = Bounds;
+            var workingArea = Screen.FromControl(this).WorkingArea;
             ResizeClientArea(Math.Max(contentHeight, MinimumClientHeight));
+            if (Opacity > 0 && bounds.Size != Size)
+            {
+                // Discovery may grow the already-visible dialog. Keep its centre
+                // stable and its buttons inside the current monitor's work area.
+                Left = Math.Clamp(bounds.Left, workingArea.Left, Math.Max(workingArea.Left, workingArea.Right - Width));
+                Top = Math.Clamp(bounds.Top + (bounds.Height - Height) / 2,
+                    workingArea.Top, Math.Max(workingArea.Top, workingArea.Bottom - Height));
+            }
         }
 
         private void ResizeClientArea(int logicalClientHeight)
@@ -172,7 +186,7 @@ namespace BluetoothBatteryMonitor
                 ScaleLogicalPixels(ClampLogicalClientHeight(logicalClientHeight))
             );
 
-            ClientSize = clientSize;
+            if (ClientSize != clientSize) ClientSize = clientSize;
             MinimumSize = SizeFromClientSize(new System.Drawing.Size(
                 clientSize.Width,
                 ScaleLogicalPixels(MinimumClientHeight)
@@ -200,37 +214,68 @@ namespace BluetoothBatteryMonitor
             return DeviceDpi > 0 ? DeviceDpi / 96.0 : 1.0;
         }
 
-        private async Task HandleGetInitAsync()
+        private void HandleGetInit()
+        {
+            if (_initialized) return;
+            _initialized = true;
+            var configuredNames = new HashSet<string>(BatteryMonitor.LoadDeviceNamesFromRegistry(), StringComparer.OrdinalIgnoreCase);
+            // Show saved/cached devices immediately; discovery must not hold the
+            // footer or the entire dialog behind a slow Bluetooth enumeration.
+            SendMessage(new
+            {
+                type = "init", devices = BuildDeviceList(configuredNames, _cachedPairedNames),
+                version = AppUpdater.DisplayVersion, autoCheck = AppUpdater.Instance.AutoCheck,
+                loadingDevices = true
+            });
+            SendUpdateState();
+            _ = RefreshDevicesAsync(configuredNames);
+            if (!AppUpdater.Instance.Status.StartsWith("Successfully updated", StringComparison.Ordinal))
+                _ = AppUpdater.Instance.CheckAsync(true);
+        }
+
+        private static object[] BuildDeviceList(HashSet<string> configuredNames, IEnumerable<string> pairedNames)
+        {
+            // Retain saved devices even if Windows temporarily omits them; saving
+            // during a refresh must not silently stop monitoring a device.
+            return configuredNames.Concat(pairedNames).Distinct(StringComparer.OrdinalIgnoreCase)
+                .OrderBy(name => name, StringComparer.OrdinalIgnoreCase)
+                .Select(name => (object)new { name, isConfigured = configuredNames.Contains(name) }).ToArray();
+        }
+
+        private async Task RefreshDevicesAsync(HashSet<string> configuredNames)
         {
             try
             {
-                var configuredNames = new HashSet<string>(
-                    BatteryMonitor.LoadDeviceNamesFromRegistry(),
-                    StringComparer.OrdinalIgnoreCase
-                );
-
-                var pairedNames = await EnumeratePairedDevicesAsync();
-
-                var devices = pairedNames
-                    .Select(name => new { name, isConfigured = configuredNames.Contains(name) })
-                    .OrderBy(d => d.name, StringComparer.OrdinalIgnoreCase)
-                    .ToList();
-
-                var initJson = JsonSerializer.Serialize(new { devices, version = AppUpdater.DisplayVersion, autoCheck = AppUpdater.Instance.AutoCheck });
-                await _webView!.CoreWebView2.ExecuteScriptAsync($"window.onInit({initJson})");
-                SendUpdateState();
-                if (!AppUpdater.Instance.Status.StartsWith("Successfully updated", StringComparison.Ordinal))
-                    _ = AppUpdater.Instance.CheckAsync(true);
+                var names = await Task.Run(EnumeratePairedDevicesAsync)
+                    .WaitAsync(TimeSpan.FromSeconds(15), _lifetime.Token);
+                if (_lifetime.IsCancellationRequested) return;
+                _cachedPairedNames = names;
+                SendMessage(new { type = "devices", devices = BuildDeviceList(configuredNames, names), loadingDevices = false });
             }
-            catch { }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested) { }
+            catch
+            {
+                SendMessage(new
+                {
+                    type = "devices", devices = BuildDeviceList(configuredNames, _cachedPairedNames), loadingDevices = false,
+                    deviceError = "Could not refresh Bluetooth devices. Your saved selection is still available."
+                });
+            }
+        }
+
+        private void SendMessage(object message)
+        {
+            if (IsDisposed || _lifetime.IsCancellationRequested || _webView?.CoreWebView2 == null) return;
+            _webView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
         }
 
         private void SendUpdateState()
         {
             if (IsDisposed || _webView?.CoreWebView2 == null) return;
             var updater = AppUpdater.Instance;
-            var json = JsonSerializer.Serialize(new { status = updater.Status, busy = updater.Busy, canInstall = updater.CanInstall, automatic = updater.AutomaticResult, currentVersion = AppUpdater.DisplayVersion, remoteVersion = updater.AvailableVersion });
-            _webView.CoreWebView2.PostWebMessageAsJson(json);
+            SendMessage(new { type = "update", status = updater.Status, busy = updater.Busy, installing = updater.Installing,
+                canInstall = updater.CanInstall, automatic = updater.AutomaticResult,
+                currentVersion = AppUpdater.DisplayVersion, remoteVersion = updater.AvailableVersion });
         }
 
         private void HandleSaveDevices(JsonElement root)
@@ -252,31 +297,20 @@ namespace BluetoothBatteryMonitor
 
         private static async Task<List<string>> EnumeratePairedDevicesAsync()
         {
-            var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-            try
-            {
-                var leSelector = BluetoothLEDevice.GetDeviceSelector();
-                var classicSelector = BluetoothDevice.GetDeviceSelector();
-                var leDevices = await DeviceInformation.FindAllAsync(leSelector);
-                var classicDevices = await DeviceInformation.FindAllAsync(classicSelector);
-
-                foreach (var device in leDevices.Concat(classicDevices))
-                {
-                    var name = device.Name?.Trim();
-                    if (!string.IsNullOrWhiteSpace(name))
-                        names.Add(name);
-                }
-            }
-            catch { }
-
-            return names.OrderBy(n => n, StringComparer.OrdinalIgnoreCase).ToList();
+            // These independent WinRT queries can run together on a worker thread.
+            var leDevices = DeviceInformation.FindAllAsync(BluetoothLEDevice.GetDeviceSelector()).AsTask();
+            var classicDevices = DeviceInformation.FindAllAsync(BluetoothDevice.GetDeviceSelector()).AsTask();
+            var results = await Task.WhenAll(leDevices, classicDevices).ConfigureAwait(false);
+            return results.SelectMany(devices => devices).Select(device => device.Name?.Trim())
+                .Where(name => !string.IsNullOrWhiteSpace(name)).Select(name => name!)
+                .Distinct(StringComparer.OrdinalIgnoreCase).OrderBy(name => name, StringComparer.OrdinalIgnoreCase).ToList();
         }
 
         protected override void Dispose(bool disposing)
         {
-            if (disposing)
+            if (disposing && !IsDisposed)
             {
+                _lifetime.Cancel();
                 AppUpdater.Instance.Changed -= SendUpdateState;
                 AppUpdater.Instance.Cancel();
                 if (_webView != null)
@@ -287,6 +321,10 @@ namespace BluetoothBatteryMonitor
                     _webView.Dispose();
                     _webView = null;
                 }
+                Icon = null;
+                _dialogIcon?.Dispose();
+                _dialogIcon = null;
+                _lifetime.Dispose();
             }
             base.Dispose(disposing);
         }

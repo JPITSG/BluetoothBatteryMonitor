@@ -43,10 +43,17 @@ On first launch, a sentinel battery icon appears in the tray. Right-click it and
 ```bash
 make          # full build: frontend + .NET publish
 make clean    # remove all build artifacts
-make test     # connection-state and tray-visibility regression checks
+make test     # connection, tray, and update-download regression checks
 ```
 
 Output: `release/BluetoothBatteryMonitor.exe`
+
+To run the configuration UI checks, build the frontend with `make frontend`,
+serve the repository with `python3 -m http.server 8782 --bind 127.0.0.1`, and open
+`http://127.0.0.1:8782/tests/config-ui.html` in a browser. This uses a simulated
+WebView host to check immediate update/cancel feedback, delayed device discovery,
+selection preservation, and scrolling. Native WebView2 startup and the installer
+handoff still require Windows verification.
 
 ## License
 
@@ -54,7 +61,7 @@ Output: `release/BluetoothBatteryMonitor.exe`
 
 ## Updates
 
-Version: **1.0.8**.
+Version: **1.0.9**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

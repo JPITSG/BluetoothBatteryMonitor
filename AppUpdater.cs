@@ -21,15 +21,19 @@ internal sealed class AppUpdater : IDisposable
     private CancellationTokenSource? _cancellation;
     private string? _staged;
     private Version? _available;
+    private bool _installing;
     internal event Action? Changed;
     internal event Action? UpdateAvailable;
     internal string Status { get; private set; } = "";
-    internal bool Busy => _cancellation != null;
+    internal bool Busy => _cancellation != null || _installing;
+    internal bool Installing => _installing;
     internal bool CanInstall => _staged != null && _available >= CurrentVersion;
     internal string? AvailableVersion => _available?.ToString(3);
-    internal void Dismiss() { Discard(); Status = ""; Changed?.Invoke(); }
+    internal void Dismiss() { if (Busy) return; Discard(); Status = ""; Changed?.Invoke(); }
     internal bool AutomaticResult { get; private set; }
-    internal static Version CurrentVersion => ReadVersion(Application.ExecutablePath);
+    // The SDK stamps the assembly and Windows file version from the same project
+    // version. Avoid parsing the 75 MB executable for every progress notification.
+    internal static Version CurrentVersion { get; } = typeof(AppUpdater).Assembly.GetName().Version!;
     internal static string DisplayVersion => CurrentVersion.ToString(3);
     internal bool AutoCheck
     {
@@ -57,48 +61,32 @@ internal sealed class AppUpdater : IDisposable
     }
     internal async Task CheckAsync(bool automatic)
     {
-        if (Busy || (automatic && (!AutoCheck || CanInstall))) return;
+        if (Busy || (automatic && (!AutoCheck || CanInstall)))
+        {
+            // A manual click during an automatic check must still get an acknowledgement.
+            Changed?.Invoke();
+            return;
+        }
         Discard();
         AutomaticResult = automatic;
-        using var cancellation = new CancellationTokenSource();
+        using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         _cancellation = cancellation;
+        bool acceptingProgress = true;
         string path = Path.Combine(Path.GetTempPath(), "BluetoothBatteryMonitor-" + Guid.NewGuid().ToString("N") + ".exe");
         try
         {
             Status = "Checking for updates…";
             Changed?.Invoke();
-            using var response = await _http.GetAsync(DownloadUrl, HttpCompletionOption.ResponseHeadersRead, cancellation.Token);
-            response.EnsureSuccessStatusCode();
-            long expected = response.Content.Headers.ContentLength ?? throw new InvalidDataException("The server did not report a file size.");
-            if (expected <= 0 || expected > MaximumSize) throw new InvalidDataException("Invalid update size.");
-            await using (var input = await response.Content.ReadAsStreamAsync(cancellation.Token))
-            await using (var output = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+            var progress = new Progress<string>(status =>
             {
-                byte[] buffer = new byte[81920];
-                long total = 0;
-                var watch = Stopwatch.StartNew();
-                long lastReport = 0;
-                int count;
-                while ((count = await input.ReadAsync(buffer, cancellation.Token)) > 0)
-                {
-                    total += count;
-                    if (total > expected || total > MaximumSize) throw new InvalidDataException("Invalid update size.");
-                    await output.WriteAsync(buffer.AsMemory(0, count), cancellation.Token);
-                    if (watch.ElapsedMilliseconds - lastReport >= 250)
-                    {
-                        Status = $"Downloading… {total * 100 / expected}% ({total / 1024 / Math.Max(1, watch.Elapsed.TotalSeconds):0} KB/s)";
-                        lastReport = watch.ElapsedMilliseconds;
-                        Changed?.Invoke();
-                    }
-                }
-                if (total != expected) throw new InvalidDataException("The download is incomplete.");
-            }
+                // Progress can already be queued when cancellation/completion wins.
+                if (!acceptingProgress || !ReferenceEquals(_cancellation, cancellation) || cancellation.IsCancellationRequested) return;
+                Status = status;
+                Changed?.Invoke();
+            });
+            _available = await Task.Run(() => UpdateDownload.StageAsync(
+                _http, DownloadUrl, path, MaximumSize, ValidateDownload, progress, cancellation.Token));
             cancellation.Token.ThrowIfCancellationRequested();
-            using (var stream = File.OpenRead(path))
-            using (var pe = new PEReader(stream))
-                if (pe.PEHeaders.CoffHeader.Machine != Machine.Amd64 || pe.PEHeaders.PEHeader == null)
-                    throw new InvalidDataException("The update is not a valid 64-bit executable.");
-            _available = ReadVersion(path);
             var current = CurrentVersion;
             Status = $"Installed: v{current.ToString(3)} · Available: v{_available.ToString(3)}. " +
                 (_available > current ? "A newer version is ready." : _available == current ? "You're up to date." : "The repository version is older; downgrades are disabled.");
@@ -110,7 +98,8 @@ internal sealed class AppUpdater : IDisposable
         catch (Exception ex) { Status = automatic ? "" : "Update failed: " + ex.Message; }
         finally
         {
-            Delete(path);
+            acceptingProgress = false;
+            await Task.Run(() => Delete(path));
             _cancellation = null;
             Changed?.Invoke();
         }
@@ -119,38 +108,73 @@ internal sealed class AppUpdater : IDisposable
     internal void Cancel() => _cancellation?.Cancel();
     internal void Ignore()
     {
-        if (_available == null) return;
+        if (Busy || _available == null) return;
         using var key = Registry.CurrentUser.CreateSubKey(RegistryPath);
         key.SetValue("IgnoredUpdateVersion", _available.ToString());
         Discard(); Status = ""; Changed?.Invoke();
     }
-    internal void Discard() { Delete(_staged); _staged = null; _available = null; }
-    private static void Delete(string? path) { try { if (!string.IsNullOrEmpty(path)) File.Delete(path); } catch { } }
-    internal void Install()
+    internal void Discard()
     {
-        if (!CanInstall) return;
+        if (_installing) return;
+        var staged = _staged;
+        _staged = null;
+        _available = null;
+        if (staged != null) _ = Task.Run(() => Delete(staged));
+    }
+    private static void Delete(string? path) { try { if (!string.IsNullOrEmpty(path)) File.Delete(path); } catch { } }
+    private static Version ValidateDownload(string path)
+    {
+        using var stream = File.OpenRead(path);
+        using var pe = new PEReader(stream);
+        if (pe.PEHeaders.CoffHeader.Machine != Machine.Amd64 || pe.PEHeaders.PEHeader == null)
+            throw new InvalidDataException("The update is not a valid 64-bit executable.");
+        return ReadVersion(path);
+    }
+    internal async Task InstallAsync()
+    {
+        if (Busy || !CanInstall) return;
+        var staged = _staged!;
+        var available = _available;
+        var executable = Application.ExecutablePath;
+        _installing = true;
+        Status = "Starting update…";
+        Changed?.Invoke();
         string helper = Path.Combine(Path.GetTempPath(), "BluetoothBatteryMonitor-helper-" + Guid.NewGuid().ToString("N") + ".exe");
         try
         {
-            if (ReadVersion(_staged!) != _available) throw new InvalidDataException("The staged update changed. Check again.");
-            File.Copy(Application.ExecutablePath, helper);
-            var start = new ProcessStartInfo(helper) { UseShellExecute = true };
-            // Request elevation only when the installation directory is not writable.
-            string probe = Path.Combine(Path.GetDirectoryName(Application.ExecutablePath)!, Guid.NewGuid() + ".tmp");
-            try { using (File.Create(probe)) { } File.Delete(probe); }
-            catch (UnauthorizedAccessException) { start.Verb = "runas"; }
-            start.ArgumentList.Add("--apply-update");
-            start.ArgumentList.Add(Environment.ProcessId.ToString());
-            start.ArgumentList.Add(Application.ExecutablePath);
-            start.ArgumentList.Add(_staged!);
+            // Antivirus scanning/version validation and copying the helper can take
+            // seconds. Keep the dialog's message pump free throughout this work.
+            var start = await Task.Run(() =>
+            {
+                if (ValidateDownload(staged) != available) throw new InvalidDataException("The staged update changed. Check again.");
+                File.Copy(executable, helper);
+                var info = new ProcessStartInfo(helper) { UseShellExecute = true };
+                string probe = Path.Combine(Path.GetDirectoryName(executable)!, Guid.NewGuid() + ".tmp");
+                try { using (File.Create(probe)) { } File.Delete(probe); }
+                catch (UnauthorizedAccessException) { info.Verb = "runas"; }
+                info.ArgumentList.Add("--apply-update");
+                info.ArgumentList.Add(Environment.ProcessId.ToString());
+                info.ArgumentList.Add(executable);
+                info.ArgumentList.Add(staged);
+                return info;
+            });
             using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\BluetoothBatteryMonitor_UpdateReady_" + Environment.ProcessId);
             using var helperProcess = Process.Start(start) ?? throw new IOException("Could not start the updater.");
-            if (!ready.WaitOne(TimeSpan.FromSeconds(20)))
+            if (!await Task.Run(() => ready.WaitOne(TimeSpan.FromSeconds(20))))
                 throw new IOException("The updater did not become ready. The application is still running.");
             _staged = null;
             Application.Exit();
         }
-        catch (Exception ex) { Delete(helper); Status = "Update failed: " + ex.Message; Changed?.Invoke(); }
+        catch (Exception ex)
+        {
+            await Task.Run(() => Delete(helper));
+            Status = "Update failed: " + ex.Message;
+        }
+        finally
+        {
+            _installing = false;
+            Changed?.Invoke();
+        }
     }
     internal static bool HandleCommandLine(string[] args)
     {

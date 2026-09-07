@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Configuration UI checks</title>
+<style>
+  body { margin: 24px; background: #f4f4f5; color: #262626; font: 14px system-ui; }
+  iframe { width: 420px; border: 1px solid #d4d4d4; background: white; border-radius: 6px; }
+  li { margin-bottom: 6px; } .fail { color: #b91c1c; } .pass { color: #166534; }
+</style>
+<h1>Configuration UI checks</h1>
+<p>Uses the built page with a simulated WebView host. Host replies are held until immediate UI feedback is verified.</p>
+<iframe title="Configuration preview"></iframe>
+<ol id="results"></ol>
+<p id="outcome" role="status">Running…</p>
+<script type="module">
+const frame = document.querySelector('iframe');
+const results = document.querySelector('#results');
+let checks = 0;
+const check = (condition, message) => {
+  const item = document.createElement('li');
+  item.className = condition ? 'pass' : 'fail';
+  item.textContent = `${condition ? 'PASS' : 'FAIL'}: ${message}`;
+  results.append(item);
+  if (!condition) throw new Error(message);
+  checks++;
+};
+const wait = async (predicate) => {
+  const deadline = performance.now() + 5000;
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error('Timed out waiting for UI');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+};
+function mockHost() {
+  const listeners = new Set();
+  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.9' };
+  const devices = [
+    { name: 'Headphones', isConfigured: true },
+    { name: 'Keyboard', isConfigured: false },
+    { name: 'Mouse', isConfigured: true },
+  ];
+  const messages = [];
+  const send = data => listeners.forEach(listener => listener({ data }));
+  window.testHost = { send, state, devices, messages };
+  window.chrome ??= {};
+  window.chrome.webview = {
+    addEventListener: (_, listener) => listeners.add(listener),
+    removeEventListener: (_, listener) => listeners.delete(listener),
+    postMessage: raw => {
+      const message = JSON.parse(raw);
+      messages.push(message);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, version: '1.0.9', autoCheck: false, loadingDevices: true }), 0);
+      if (message.action === 'getUpdateState') setTimeout(() => send(state), 0);
+      if (message.action === 'resize') parent.postMessage({ testHeight: message.height }, '*');
+      // All action acknowledgements are deliberately controlled by the test.
+    },
+  };
+}
+window.addEventListener('message', event => {
+  if (event.source === frame.contentWindow && event.data.testHeight) frame.style.height = `${Math.min(560, event.data.testHeight)}px`;
+});
+try {
+  const html = await (await fetch('../assets/dist/index.html')).text();
+  frame.srcdoc = html.replace('<head>', `<head><script>(${mockHost.toString()})();<\/script>`);
+  await wait(() => frame.contentDocument.querySelector('button'));
+  const doc = frame.contentDocument;
+  const host = frame.contentWindow.testHost;
+  const button = text => [...doc.querySelectorAll('button')].find(button => button.textContent === text);
+  const checkbox = name => [...doc.querySelectorAll('section label')].find(label => label.textContent === name)?.querySelector('input');
+  const paint = () => new Promise(resolve => frame.contentWindow.requestAnimationFrame(() => frame.contentWindow.requestAnimationFrame(resolve)));
+  await paint();
+  check(!!button('Update') && doc.body.textContent.includes('Refreshing devices'), 'Footer and saved devices are usable before discovery finishes.');
+  checkbox('Mouse').click();
+  checkbox('Keyboard').click();
+  const started = performance.now();
+  button('Update').click();
+  await wait(() => button('Checking...'));
+  await paint();
+  const latency = performance.now() - started;
+  check(latency < 1000, `Update paints immediate feedback before any host reply (${Math.round(latency)} ms in this browser).`);
+  await wait(() => frame.contentWindow.getComputedStyle(button('Checking...')).backgroundColor === 'rgb(220, 38, 38)');
+  check(frame.contentWindow.getComputedStyle(button('Checking...')).backgroundColor === 'rgb(220, 38, 38)', 'Checking uses the red stop button.');
+  check(!button('Checking...').textContent.includes('KB/s'), 'No download speed is shown in the button.');
+  let rowMutations = 0;
+  const observer = new MutationObserver(records => rowMutations += records.length);
+  observer.observe(doc.querySelector('section'), { childList: true, subtree: true, attributes: true, characterData: true });
+  const resizeCount = host.messages.filter(message => message.action === 'resize').length;
+  for (let i = 0; i < 200; i++) host.send({ ...host.state, busy: true, status: `Downloading… ${i}%` });
+  await paint();
+  observer.disconnect();
+  check(rowMutations === 0, 'Download progress leaves the device rows untouched.');
+  check(host.messages.filter(message => message.action === 'resize').length === resizeCount, 'Download progress does not trigger native resize traffic.');
+  button('Checking...').click();
+  await wait(() => button('Stopping...'));
+  check(button('Stopping...').disabled, 'Cancel responds immediately and prevents duplicate requests.');
+  host.send({ ...host.state, status: 'Update check cancelled or timed out.' });
+  await wait(() => button('Update'));
+  check(!doc.querySelector('dialog').open, 'A cancelled check returns to idle without an alert.');
+  host.send({ type: 'devices', devices: [host.devices[0], host.devices[2], { name: 'Gamepad', isConfigured: false }], loadingDevices: false });
+  await wait(() => checkbox('Gamepad'));
+  check(!checkbox('Mouse').checked && checkbox('Keyboard').checked, 'Late discovery preserves edits and selected devices missing from the refreshed list.');
+  button('Save').click();
+  const saved = host.messages.findLast(message => message.action === 'saveDevices').devices;
+  check(saved.includes('Keyboard') && saved.includes('Headphones') && !saved.includes('Mouse'), 'Save sends the edited selection after discovery.');
+  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.9' });
+  await wait(() => doc.querySelector('dialog').open);
+  button('Force update').click();
+  await wait(() => button('Starting...'));
+  check(!doc.querySelector('dialog').open && button('Starting...').disabled, 'Installation responds immediately before the helper acknowledgement.');
+  host.send({ ...host.state, status: 'Update failed: simulated helper failure.' });
+  await wait(() => doc.querySelector('dialog').open);
+  check(doc.querySelector('#update-alert-title').textContent === 'Update failed', 'Helper failures restore an actionable error dialog.');
+  button('OK').click();
+  await wait(() => !doc.querySelector('dialog').open);
+  check(!!button('Update'), 'Dismissal closes immediately before the host reply.');
+  host.send({ ...host.state });
+  host.send({ type: 'devices', devices: Array.from({ length: 35 }, (_, i) => ({ name: `Device ${i}`, isConfigured: false })), loadingDevices: false });
+  await wait(() => checkbox('Device 34'));
+  await paint();
+  check(doc.documentElement.scrollHeight > frame.clientHeight, 'Long lists scroll only when content exceeds the available height.');
+  host.send({ type: 'devices', devices: host.devices, loadingDevices: false });
+  await wait(() => checkbox('Mouse'));
+  await paint();
+  await paint();
+  check(doc.documentElement.scrollHeight <= frame.clientHeight && doc.documentElement.scrollWidth <= frame.clientWidth, 'A normal device list fits without vertical or horizontal scrollbars.');
+  check(frame.contentWindow.getComputedStyle(doc.querySelector('#root > div > div')).padding === '16px', 'Outer padding matches SystrayLauncher (16px).');
+  document.querySelector('#outcome').textContent = `Passed ${checks} browser checks.`;
+} catch (error) {
+  document.querySelector('#outcome').textContent = `FAILED: ${error.message}`;
+  document.querySelector('#outcome').className = 'fail';
+}
+</script>
+</html>

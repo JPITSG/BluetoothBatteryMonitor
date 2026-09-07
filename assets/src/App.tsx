@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { onInit, getInit, reportHeight, type InitData } from "./lib/bridge";
+import { onHostMessage, getInit, reportHeight, type InitData } from "./lib/bridge";
 import ConfigView from "./ConfigView";
 
 export default function App() {
@@ -7,48 +7,44 @@ export default function App() {
   const [initData, setInitData] = useState<InitData | null>(null);
 
   useEffect(() => {
-    onInit((data) => setInitData(data));
+    const unsubscribe = onHostMessage((message) => {
+      if (message.type === "init") setInitData(message);
+      if (message.type === "devices") setInitData((current) => current && { ...current, ...message });
+    });
     getInit();
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
     const el = containerRef.current;
-    if (!el || !initData) return;
-
+    if (!el) return;
     let lastHeight = 0;
-    const report = () => {
-      // Measure content, not the viewport: the native dialog must be able to
-      // grow and shrink. Allow for fractional pixels at laptop DPI scales.
-      const height = Math.ceil(Math.max(el.scrollHeight, el.getBoundingClientRect().height)) + 2;
-      if (height !== lastHeight) {
-        lastHeight = height;
-        reportHeight(height);
-      }
+    let frame = 0;
+    const scheduleReport = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = 0;
+        // Content, not viewport size; preserve fractional-DPI headroom without
+        // feeding native window resizes back through a body observer.
+        const height = Math.ceil(Math.max(el.scrollHeight, el.getBoundingClientRect().height)) + 2;
+        if (height !== lastHeight) {
+          lastHeight = height;
+          reportHeight(height);
+        }
+      });
     };
-
-    requestAnimationFrame(report);
-    const settlingReports = [
-      window.setTimeout(report, 50),
-      window.setTimeout(report, 250),
-    ];
-
-    const observer = new ResizeObserver(report);
+    scheduleReport();
+    const observer = new ResizeObserver(scheduleReport);
     observer.observe(el);
-    if (document.body) {
-      observer.observe(document.body);
-    }
-
     return () => {
       observer.disconnect();
-      settlingReports.forEach((timerId) => window.clearTimeout(timerId));
+      cancelAnimationFrame(frame);
     };
-  }, [initData]);
-
-  if (!initData) return null;
+  }, []);
 
   return (
     <div ref={containerRef}>
-      <ConfigView devices={initData.devices} version={initData.version} autoCheck={initData.autoCheck} />
+      {initData ? <ConfigView {...initData} /> : <p role="status" className="p-4 text-xs text-neutral-500">Loading configuration…</p>}
     </div>
   );
 }

@@ -3,43 +3,52 @@ export interface DeviceEntry {
   isConfigured: boolean;
 }
 
-export interface InitData {
+export interface DeviceState {
   devices: DeviceEntry[];
+  loadingDevices: boolean;
+  deviceError?: string;
+}
+
+export interface InitData extends DeviceState {
   version: string;
   autoCheck: boolean;
 }
 
-type InitCallback = (data: InitData) => void;
+export interface UpdateState {
+  status: string;
+  busy: boolean;
+  installing: boolean;
+  canInstall: boolean;
+  automatic: boolean;
+  currentVersion?: string;
+  remoteVersion?: string;
+}
 
-let initCallback: InitCallback | null = null;
+export type HostMessage =
+  | ({ type: "init" } & InitData)
+  | ({ type: "devices" } & DeviceState)
+  | ({ type: "update" } & UpdateState);
 
 declare global {
   interface Window {
-    onInit: (data: InitData) => void;
     chrome?: {
       webview?: {
-        addEventListener: (type: "message", cb: (event: MessageEvent<UpdateState>) => void) => void;
-        removeEventListener: (type: "message", cb: (event: MessageEvent<UpdateState>) => void) => void;
+        addEventListener: (type: "message", cb: (event: MessageEvent<HostMessage>) => void) => void;
+        removeEventListener: (type: "message", cb: (event: MessageEvent<HostMessage>) => void) => void;
         postMessage: (s: string) => void;
       };
     };
   }
 }
 
-window.onInit = (data: InitData) => {
-  initCallback?.(data);
-};
-
-export function onInit(cb: InitCallback) {
-  initCallback = cb;
+export function onHostMessage(callback: (message: HostMessage) => void) {
+  const receive = (event: MessageEvent<HostMessage>) => callback(event.data);
+  window.chrome?.webview?.addEventListener("message", receive);
+  return () => window.chrome?.webview?.removeEventListener("message", receive);
 }
 
 export function postMessage(msg: Record<string, unknown>) {
-  try {
-    window.chrome?.webview?.postMessage(JSON.stringify(msg));
-  } catch {
-    console.log("postMessage (no WebView2):", msg);
-  }
+  window.chrome?.webview?.postMessage(JSON.stringify(msg));
 }
 
 export function getInit() {
@@ -57,5 +66,3 @@ export function closeDialog() {
 export function reportHeight(height: number) {
   postMessage({ action: "resize", height });
 }
-
-export interface UpdateState { status: string; busy: boolean; canInstall: boolean; automatic: boolean; currentVersion?: string; remoteVersion?: string; }
