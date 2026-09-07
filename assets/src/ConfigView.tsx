@@ -1,12 +1,19 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Checkbox } from "./components/ui/checkbox";
 import { Label } from "./components/ui/label";
-import { saveDevices, postMessage, type InitData } from "./lib/bridge";
+import { saveDevices, onHostMessage, postMessage, type InitData } from "./lib/bridge";
 import UpdateControls from "./UpdateControls";
-import DeviceStatusList from "./DeviceStatusList";
 
 export default function ConfigView({ devices, version, autoCheck, loadingDevices, deviceError, deviceStatuses }: InitData) {
   const [automatic, setAutomatic] = useState(autoCheck);
+  const [statuses, setStatuses] = useState(deviceStatuses);
+  useEffect(() => {
+    const unsubscribe = onHostMessage((message) => {
+      if (message.type === "deviceStatus") setStatuses(message.deviceStatuses);
+    });
+    postMessage({ action: "getDeviceStatus" });
+    return unsubscribe;
+  }, []);
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(devices.filter((device) => device.isConfigured).map((device) => device.name))
   );
@@ -33,18 +40,23 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
           <div className="rounded-md border border-neutral-200 p-2 space-y-3" aria-busy={loadingDevices}>
             {visibleDevices.length === 0 ? (
               <p className="text-neutral-500 py-1 text-center">{loadingDevices ? "Finding paired Bluetooth devices…" : "No paired Bluetooth devices found."}</p>
-            ) : visibleDevices.map((device) => (
-              <label key={device.name} className="flex items-start gap-2 cursor-pointer select-none">
-                <Checkbox checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
-                <span className="min-w-0 break-words leading-4">{device.name}</span>
-              </label>
-            ))}
+            ) : visibleDevices.map((device) => {
+              const status = statuses.find((item) => item.name.toLowerCase() === device.name.toLowerCase());
+              return (
+                <label key={device.name} className="flex items-start gap-2 cursor-pointer select-none">
+                  <Checkbox checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
+                  <span className="min-w-0 break-words leading-4">{device.name}{status && (
+                    <span className={status.online ? "text-green-700" : "text-neutral-500"}>
+                      {status.online ? ` · Online · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Offline"}
+                    </span>
+                  )}</span>
+                </label>
+              );
+            })}
           </div>
           {loadingDevices && visibleDevices.length > 0 && <p role="status" className="text-neutral-500 text-[11px] leading-snug">Refreshing devices…</p>}
           {deviceError && <p role="status" className="text-neutral-500 text-[11px] leading-snug">{deviceError}</p>}
         </section>
-
-        <DeviceStatusList initialStatuses={deviceStatuses} />
 
         <div className="flex items-start gap-2 pt-1">
           <Checkbox id="autoCheckForUpdates" checked={automatic} className="mt-0.5" onChange={(event) => {

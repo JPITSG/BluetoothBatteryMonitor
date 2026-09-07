@@ -33,7 +33,7 @@ const wait = async (predicate) => {
 };
 function mockHost() {
   const listeners = new Set();
-  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.10' };
+  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.11' };
   const devices = [
     { name: 'Headphones', isConfigured: true },
     { name: 'Keyboard', isConfigured: false },
@@ -53,7 +53,7 @@ function mockHost() {
     postMessage: raw => {
       const message = JSON.parse(raw);
       messages.push(message);
-      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.10', autoCheck: false, loadingDevices: true }), 0);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.11', autoCheck: false, loadingDevices: true }), 0);
       if (message.action === 'getDeviceStatus') setTimeout(() => send({ type: 'deviceStatus', deviceStatuses }), 0);
       if (message.action === 'getUpdateState') setTimeout(() => send(state), 0);
       if (message.action === 'resize') parent.postMessage({ testHeight: message.height }, '*');
@@ -71,12 +71,13 @@ try {
   const doc = frame.contentDocument;
   const host = frame.contentWindow.testHost;
   const button = text => [...doc.querySelectorAll('button')].find(button => button.textContent === text);
-  const checkbox = name => [...doc.querySelectorAll('section label')].find(label => label.textContent === name)?.querySelector('input');
+  const row = name => [...doc.querySelectorAll('section label')].find(label => label.textContent === name || label.textContent.startsWith(`${name} ·`));
+  const checkbox = name => row(name)?.querySelector('input');
   const paint = () => new Promise(resolve => frame.contentWindow.requestAnimationFrame(() => frame.contentWindow.requestAnimationFrame(resolve)));
   await paint();
   check(!!button('Update') && doc.body.textContent.includes('Refreshing devices'), 'Footer and saved devices are usable before discovery finishes.');
-  const statuses = () => doc.querySelector('dl[aria-label="Monitored device status"]');
-  const statusOf = name => [...statuses().children].find(row => row.querySelector('dt').textContent === name).querySelector('dd').textContent;
+  const statusOf = name => row(name)?.querySelector('span span')?.textContent.replace(/^ · /, '') ?? '';
+  check(!doc.querySelector('dl') && row('Mouse').textContent === 'Mouse · Online · 67%', 'Device status appears inline inside the checkbox card, without a duplicate device list.');
   check(statusOf('Mouse') === 'Online · 67%' && statusOf('Headphones') === 'Offline', 'Initial monitored-device status shows percentages only when online.');
   host.send({ type: 'deviceStatus', deviceStatuses: [{ name: 'Headphones', online: true, batteryLevel: null }, { name: 'Mouse', online: false, batteryLevel: null }] });
   await wait(() => statusOf('Mouse') === 'Offline');
@@ -86,10 +87,10 @@ try {
   await wait(() => statusOf('Mouse') === 'Online · 66%');
   check(statusOf('Headphones') === 'Online · 92%', 'Connection and battery changes appear live without reopening configuration.');
   host.send({ type: 'deviceStatus', deviceStatuses: [] });
-  await wait(() => doc.body.textContent.includes('No devices are being monitored.'));
-  check(!statuses(), 'No monitored devices produces a clear empty status.');
+  await wait(() => statusOf('Mouse') === '');
+  check(row('Mouse').textContent === 'Mouse', 'An unmonitored device is not assigned a fabricated connection state.');
   host.send({ type: 'deviceStatus', deviceStatuses: host.deviceStatuses });
-  await wait(() => statuses());
+  await wait(() => statusOf('Mouse') === 'Online · 67%');
   await paint();
   checkbox('Mouse').click();
   checkbox('Keyboard').click();
@@ -123,7 +124,7 @@ try {
   button('Save').click();
   const saved = host.messages.findLast(message => message.action === 'saveDevices').devices;
   check(saved.includes('Keyboard') && saved.includes('Headphones') && !saved.includes('Mouse'), 'Save sends the edited selection after discovery.');
-  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.10' });
+  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.11' });
   await wait(() => doc.querySelector('dialog').open);
   button('Force update').click();
   await wait(() => button('Starting...'));
@@ -145,6 +146,9 @@ try {
   await paint();
   check(doc.documentElement.scrollHeight <= frame.clientHeight && doc.documentElement.scrollWidth <= frame.clientWidth, 'A normal device list fits without vertical or horizontal scrollbars.');
   check(frame.contentWindow.getComputedStyle(doc.querySelector('#root > div > div')).padding === '16px', 'Outer padding matches SystrayLauncher (16px).');
+  // Leave the preview showing the saved monitoring selection after testing edits.
+  if (checkbox('Keyboard').checked) checkbox('Keyboard').click();
+  if (!checkbox('Mouse').checked) checkbox('Mouse').click();
   document.querySelector('#outcome').textContent = `Passed ${checks} browser checks.`;
 } catch (error) {
   document.querySelector('#outcome').textContent = `FAILED: ${error.message}`;
