@@ -47,7 +47,6 @@ export default function ConfigView({ devices, version, autoCheck }: ConfigViewPr
   const alertMessage = update.status.startsWith("Update failed") ? update.status : update.canInstall
     ? sameVersion ? "The remote build matches your current version. You can force a reinstall if needed." : "A newer version is ready to install."
     : update.remoteVersion ? "The remote build is older than your current version." : update.status;
-  const speed = update.status.match(/\(([\d,]+) KB\/s\)/)?.[1];
 
   const toggle = (name: string) => {
     setSelected((prev) => {
@@ -95,7 +94,7 @@ export default function ConfigView({ devices, version, autoCheck }: ConfigViewPr
               if (update.busy) setStopping(true);
               postMessage({ action: update.busy ? "cancelUpdate" : "checkUpdate" });
             }}>
-            <span className="truncate">{stopping ? "Stopping..." : update.busy ? speed ? `Checking (${speed} KB/s)...` : "Checking..." : "Update"}</span>
+            <span className="truncate">{stopping ? "Stopping..." : update.busy ? "Checking..." : "Update"}</span>
           </Button>
           <Button variant="outline" size="sm" className="min-w-[5rem]" onClick={closeDialog}>Cancel</Button>
           <Button size="sm" className="min-w-[5rem]" onClick={() => saveDevices(Array.from(selected))}>Save</Button>
