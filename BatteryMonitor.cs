@@ -41,9 +41,6 @@ namespace BluetoothBatteryMonitor
         // Cache for HFP device instance IDs (device name -> instance ID)
         private readonly Dictionary<string, string> _hfpInstanceIdCache = new(StringComparer.OrdinalIgnoreCase);
 
-        // Sentinel icon shown when no device icons are visible
-        private NotifyIcon? _sentinelIcon;
-        
         private int _lastScreenWidth;
         private int _lastScreenHeight;
         private float _lastDpiX;
@@ -54,6 +51,7 @@ namespace BluetoothBatteryMonitor
         private Icon? _iconMedium;
         private Icon? _iconLow;
         private Icon? _iconEmpty;
+        private Icon? _iconUnknown;
 
         private const string RegistryKeyPath = @"SOFTWARE\JPIT\BluetoothBatteryMonitor";
         private const string RegistryDevicesValue = "Devices";
@@ -160,8 +158,6 @@ namespace BluetoothBatteryMonitor
             InitializeDevices();
             bool shouldShowConfigurationOnLaunch = forceConfiguration || _devices.Count == 0;
             CreateTrayIcons();
-            CreateSentinelIcon();
-            UpdateSentinelVisibility();
 
             _uiRefreshTimer = new System.Windows.Forms.Timer
             {
@@ -270,6 +266,7 @@ namespace BluetoothBatteryMonitor
             var oldIconMedium = _iconMedium;
             var oldIconLow = _iconLow;
             var oldIconEmpty = _iconEmpty;
+            var oldIconUnknown = _iconUnknown;
 
             LoadBatteryIcons();
 
@@ -290,17 +287,6 @@ namespace BluetoothBatteryMonitor
                 catch { }
             }
 
-            // The sentinel shares _iconEmpty; repoint it at the freshly loaded
-            // icon before the old one is disposed. Otherwise it keeps a reference
-            // to a disposed Icon, which throws ObjectDisposedException when
-            // Windows rebuilds the tray (e.g. resuming from hibernation or
-            // restarting Explorer) and NotifyIcon re-reads its icon handle.
-            if (_sentinelIcon != null)
-            {
-                try { _sentinelIcon.Icon = _iconEmpty ?? CreateFallbackIcon(); }
-                catch { }
-            }
-
             try
             {
                 oldIconFull?.Dispose();
@@ -308,6 +294,8 @@ namespace BluetoothBatteryMonitor
                 oldIconMedium?.Dispose();
                 oldIconLow?.Dispose();
                 oldIconEmpty?.Dispose();
+                if (!ReferenceEquals(oldIconUnknown, oldIconEmpty))
+                    oldIconUnknown?.Dispose();
             }
             catch { }
         }
@@ -406,10 +394,12 @@ namespace BluetoothBatteryMonitor
                 _iconMedium = LoadIconFromResource(assembly, "icon_battery_medium.ico") ?? CreateFallbackIcon();
                 _iconLow = LoadIconFromResource(assembly, "icon_battery_low.ico") ?? CreateFallbackIcon();
                 _iconEmpty = LoadIconFromResource(assembly, "icon_battery_empty.ico") ?? CreateFallbackIcon();
+                _iconUnknown = LoadIconFromResource(assembly, "icon_battery_unknown.ico") ?? _iconEmpty;
             }
             catch
             {
                 _iconEmpty = CreateFallbackIcon();
+                _iconUnknown = _iconEmpty;
             }
         }
 
@@ -440,7 +430,7 @@ namespace BluetoothBatteryMonitor
         {
             return percentage switch
             {
-                null => _iconEmpty ?? CreateFallbackIcon(),
+                null => _iconUnknown ?? _iconEmpty ?? CreateFallbackIcon(),
                 >= 75 => _iconFull ?? CreateFallbackIcon(),
                 >= 50 => _iconGood ?? CreateFallbackIcon(),
                 >= 25 => _iconMedium ?? CreateFallbackIcon(),
@@ -513,42 +503,6 @@ namespace BluetoothBatteryMonitor
                 _trayIcons[deviceName] = notifyIcon;
                 _deviceCurrentIcons[deviceName] = notifyIcon.Icon;
             }
-        }
-
-        private void CreateSentinelIcon()
-        {
-            _sentinelIcon = new NotifyIcon
-            {
-                Icon = _iconEmpty ?? CreateFallbackIcon(),
-                Text = "Bluetooth Battery Monitor\nNo devices connected"
-            };
-            _sentinelIcon.DoubleClick += OnConfigureClick;
-
-            var contextMenu = new ContextMenuStrip { AutoSize = true };
-            contextMenu.Items.Add("Configuration", null, OnConfigureClick);
-            contextMenu.Items.Add("-");
-            contextMenu.Items.Add("Exit", null, OnExitClick);
-            _sentinelIcon.ContextMenuStrip = contextMenu;
-        }
-
-        private void UpdateSentinelVisibility()
-        {
-            if (_sentinelIcon == null) return;
-
-            // Keep a tray presence (for Configuration/Exit access) whenever no
-            // device icon is currently visible - i.e. no devices are configured
-            // or every configured device is disconnected.
-            bool anyDeviceIconVisible = false;
-            foreach (var icon in _trayIcons.Values)
-            {
-                if (icon.Visible)
-                {
-                    anyDeviceIconVisible = true;
-                    break;
-                }
-            }
-
-            _sentinelIcon.Visible = !anyDeviceIconVisible;
         }
 
         private void OnOpenBluetoothSettings(object? sender, EventArgs e)
@@ -658,7 +612,6 @@ namespace BluetoothBatteryMonitor
 
             InitializeDevices();
             CreateTrayIcons();
-            UpdateSentinelVisibility();
             InitializeDeviceWatcher();
         }
 
@@ -766,50 +719,48 @@ namespace BluetoothBatteryMonitor
                 {
                     var entry = _devices[deviceName];
                     entry.DeviceId = deviceInfo.Id;
-                    entry.IsConnected = true;
-                    
-                    TryUpdateBatteryFromProperties(deviceInfo, deviceName);
-                    ScheduleStateVerification();
 
-                    _syncContext.Post(_ => UpdateDeviceIcon(deviceName), null);
+                    // Battery may be reported directly via AEP properties.
+                    bool gotBatteryFromProps = TryUpdateBatteryFromProperties(deviceInfo, deviceName);
 
-                    // Check if this looks like a classic Bluetooth device ID
+                    // Classic Bluetooth (e.g. HFP audio) connection status is
+                    // reliable, so treat it as connected and read battery via CfgMgr32.
                     bool looksLikeClassic = deviceInfo.Id.StartsWith("Bluetooth#", StringComparison.OrdinalIgnoreCase) &&
                                            !deviceInfo.Id.Contains("BluetoothLE", StringComparison.OrdinalIgnoreCase);
-                    
-                    // For classic-looking devices, try CfgMgr32 (it's fast!)
                     if (looksLikeClassic)
                     {
-                        if (await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false))
-                        {
-                            entry.ConnectionType = DeviceConnectionType.BluetoothClassic;
-                            return;
-                        }
+                        MarkDeviceConnected(entry, deviceName, DeviceConnectionType.BluetoothClassic);
+                        if (!entry.BatteryLevel.HasValue)
+                            await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
+                        return;
                     }
 
-                    // Try BLE device creation
+                    // Bluetooth LE: the "connected" enumeration can surface transient
+                    // or unpaired association endpoints (devices that rotate their
+                    // advertised address) that cannot actually be opened. Only treat
+                    // the device as connected if we can open it; otherwise it is a
+                    // phantom endpoint and we leave it hidden rather than showing a
+                    // connected, empty-battery icon.
                     BluetoothLEDevice? leDevice = null;
                     try
                     {
                         leDevice = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
                     }
                     catch { }
-                    
+
                     if (leDevice != null)
                     {
                         entry.BluetoothDevice = leDevice;
-                        entry.ConnectionType = DeviceConnectionType.BluetoothLe;
+                        MarkDeviceConnected(entry, deviceName, DeviceConnectionType.BluetoothLe);
                         await ConnectToBatteryServiceAsync(leDevice, deviceName).ConfigureAwait(false);
                         return;
                     }
 
-                    // It's classic Bluetooth
-                    entry.ConnectionType = DeviceConnectionType.BluetoothClassic;
-                    
-                    // If we didn't get battery from CfgMgr32 earlier, try again
-                    if (!entry.BatteryLevel.HasValue)
+                    // Could not open the device. Honour a battery value if one
+                    // already arrived via AEP properties; otherwise leave it hidden.
+                    if (gotBatteryFromProps)
                     {
-                        await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
+                        MarkDeviceConnected(entry, deviceName, DeviceConnectionType.BluetoothLe);
                     }
                 }
                 finally
@@ -818,6 +769,14 @@ namespace BluetoothBatteryMonitor
                 }
             }
             catch { }
+        }
+
+        private void MarkDeviceConnected(DeviceInfo entry, string deviceName, DeviceConnectionType connectionType)
+        {
+            entry.IsConnected = true;
+            entry.ConnectionType = connectionType;
+            ScheduleStateVerification();
+            _syncContext.Post(_ => UpdateDeviceIcon(deviceName), null);
         }
 
         private async Task ConnectToBatteryServiceAsync(BluetoothLEDevice device, string deviceName)
@@ -1084,7 +1043,6 @@ namespace BluetoothBatteryMonitor
 
                 UpdateTrayIconText(deviceName, deviceInfo);
                 UpdateContextMenuItems(deviceName);
-                UpdateSentinelVisibility();
             }
             catch (ObjectDisposedException) { }
             catch { }
@@ -1424,19 +1382,13 @@ namespace BluetoothBatteryMonitor
                 _deviceMenuItems.Clear();
                 _deviceLastUpdateMenuItems.Clear();
 
-                if (_sentinelIcon != null)
-                {
-                    _sentinelIcon.Visible = false;
-                    _sentinelIcon.ContextMenuStrip?.Dispose();
-                    _sentinelIcon.Dispose();
-                    _sentinelIcon = null;
-                }
-
                 _iconFull?.Dispose();
                 _iconGood?.Dispose();
                 _iconMedium?.Dispose();
                 _iconLow?.Dispose();
                 _iconEmpty?.Dispose();
+                if (!ReferenceEquals(_iconUnknown, _iconEmpty))
+                    _iconUnknown?.Dispose();
 
                 _deviceLock.Dispose();
                 _disposeCts.Dispose();

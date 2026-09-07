@@ -46,3 +46,22 @@ Output: `release/BluetoothBatteryMonitor.exe`
 ## License
 
 [MIT](LICENSE)
+
+## Updates
+
+Version: **1.0.0**.
+
+Configuration includes **Check for updates** and **Automatically check for updates**
+(enabled by default). Automatic checks run at startup, when configuration opens,
+and every 60 minutes. A newer build opens configuration; **Ignore this version**
+persists across restarts and only affects automatic checks.
+
+The updater downloads the executable from this repository's
+`main/release/BluetoothBatteryMonitor.exe` on GitHub, validates its size, architecture,
+product identity and embedded Windows version, and shows both versions. Downloads
+show progress and speed and can be cancelled. **Install update** replaces the
+executable and restarts the app; **Force update** reinstalls an equal version.
+Older versions are never installed. A helper waits for the running app to exit,
+keeps a backup during replacement, and restores it if launching the new executable
+fails. Protected installation folders request Windows elevation. After a successful
+update, configuration displays the installed version.

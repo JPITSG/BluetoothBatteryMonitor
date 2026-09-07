@@ -1,12 +1,22 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Button } from "./components/ui/button";
-import { saveDevices, closeDialog, type DeviceEntry } from "./lib/bridge";
+import { saveDevices, closeDialog, postMessage, type UpdateState, type DeviceEntry } from "./lib/bridge";
 
 interface ConfigViewProps {
   devices: DeviceEntry[];
+  version: string;
+  autoCheck: boolean;
 }
 
-export default function ConfigView({ devices }: ConfigViewProps) {
+export default function ConfigView({ devices, version, autoCheck }: ConfigViewProps) {
+  const [automatic, setAutomatic] = useState(autoCheck);
+  const [update, setUpdate] = useState<UpdateState>({ status: "", busy: false, canInstall: false, automatic: false });
+  useEffect(() => {
+    const receive = (event: MessageEvent<UpdateState>) => setUpdate(event.data);
+    window.chrome?.webview?.addEventListener("message", receive);
+    postMessage({ action: "getUpdateState" });
+    return () => window.chrome?.webview?.removeEventListener("message", receive);
+  }, []);
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(devices.filter((d) => d.isConfigured).map((d) => d.name))
   );
@@ -52,7 +62,27 @@ export default function ConfigView({ devices }: ConfigViewProps) {
         </div>
       )}
 
-      <div className="flex justify-end gap-2 pt-1">
+      <div className="border-t pt-3 flex flex-col gap-2">
+        <label className="flex items-center gap-2">
+          <input type="checkbox" checked={automatic} onChange={(event) => {
+            setAutomatic(event.target.checked);
+            postMessage({ action: "autoUpdate", enabled: event.target.checked });
+          }} />
+          Automatically check for updates
+        </label>
+        <Button variant="outline" size="sm" onClick={() => postMessage({ action: update.busy ? "cancelUpdate" : "checkUpdate" })}>
+          {update.busy ? "Cancel update check" : "Check for updates"}
+        </Button>
+        {update.status && <p role="status" className="text-neutral-600 break-words">{update.status}</p>}
+        {update.canInstall && <div className="flex gap-2">
+          <Button size="sm" onClick={() => postMessage({ action: "installUpdate" })}>
+            {update.status.includes("You're up to date") ? "Force update" : "Install update"}
+          </Button>
+          {update.automatic && <Button variant="outline" size="sm" onClick={() => postMessage({ action: "ignoreUpdate" })}>Ignore this version</Button>}
+        </div>}
+      </div>
+      <div className="flex justify-end items-center gap-2 pt-1">
+        <span className="text-neutral-400 mr-auto">v{version}</span>
         <Button
           variant="outline"
           size="sm"

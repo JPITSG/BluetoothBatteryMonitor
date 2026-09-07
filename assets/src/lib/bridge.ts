@@ -5,6 +5,8 @@ export interface DeviceEntry {
 
 export interface InitData {
   devices: DeviceEntry[];
+  version: string;
+  autoCheck: boolean;
 }
 
 type InitCallback = (data: InitData) => void;
@@ -16,6 +18,8 @@ declare global {
     onInit: (data: InitData) => void;
     chrome?: {
       webview?: {
+        addEventListener: (type: "message", cb: (event: MessageEvent<UpdateState>) => void) => void;
+        removeEventListener: (type: "message", cb: (event: MessageEvent<UpdateState>) => void) => void;
         postMessage: (s: string) => void;
       };
     };
@@ -30,7 +34,7 @@ export function onInit(cb: InitCallback) {
   initCallback = cb;
 }
 
-function postMessage(msg: Record<string, unknown>) {
+export function postMessage(msg: Record<string, unknown>) {
   try {
     window.chrome?.webview?.postMessage(JSON.stringify(msg));
   } catch {
@@ -53,3 +57,5 @@ export function closeDialog() {
 export function reportHeight(height: number) {
   postMessage({ action: "resize", height });
 }
+
+export interface UpdateState { status: string; busy: boolean; canInstall: boolean; automatic: boolean; }

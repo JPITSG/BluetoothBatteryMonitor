@@ -16,6 +16,8 @@ namespace BluetoothBatteryMonitor
         [STAThread]
         static void Main(string[] args)
         {
+            if (AppUpdater.HandleCommandLine(args)) return;
+
             if (HasListDevicesFlag(args))
             {
                 Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
@@ -25,7 +27,8 @@ namespace BluetoothBatteryMonitor
                 return;
             }
 
-            bool configure = HasConfigureFlag(args);
+            bool updateCompleted = args.Length == 2 && args[0] == "--update-completed";
+            bool configure = HasConfigureFlag(args) || updateCompleted;
 
             // Single instance check
             const string mutexName = "Global\\BluetoothBatteryMonitor_SingleInstance";
@@ -52,7 +55,15 @@ namespace BluetoothBatteryMonitor
                 Application.SetCompatibleTextRenderingDefault(false);
 
                 using var monitor = new BatteryMonitor(configure);
+                AppUpdater.Instance.UpdateAvailable += SignalShowConfiguration;
+                if (updateCompleted)
+                {
+                    AppUpdater.Instance.StatusAfterUpdate();
+                    _ = AppUpdater.CleanupHelperAsync(args[1]);
+                }
+                else AppUpdater.Instance.Start();
                 Application.Run(monitor);
+                AppUpdater.Instance.Dispose();
             }
             finally
             {

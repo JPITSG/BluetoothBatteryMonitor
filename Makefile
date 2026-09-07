@@ -11,7 +11,7 @@ frontend: assets/dist/index.html
 assets/node_modules: assets/package.json
 	cd assets && npm install
 
-assets/dist/index.html: assets/node_modules $(wildcard assets/src/**/*) assets/index.html assets/vite.config.ts assets/tailwind.config.ts assets/tsconfig.json
+assets/dist/index.html: assets/node_modules $(shell find assets/src -type f) assets/index.html assets/vite.config.ts assets/tailwind.config.ts assets/tsconfig.json
 	cd assets && npm run build
 
 dotnet: assets/dist/index.html

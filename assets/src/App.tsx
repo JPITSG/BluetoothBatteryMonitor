@@ -48,7 +48,7 @@ export default function App() {
 
   return (
     <div ref={containerRef}>
-      <ConfigView devices={initData.devices} />
+      <ConfigView devices={initData.devices} version={initData.version} autoCheck={initData.autoCheck} />
     </div>
   );
 }

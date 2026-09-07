@@ -35,6 +35,7 @@ namespace BluetoothBatteryMonitor
             Opacity = 0;
             Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
 
+            AppUpdater.Instance.Changed += SendUpdateState;
             LoadEmbeddedHtml();
             InitializeWebView();
         }
@@ -103,6 +104,25 @@ namespace BluetoothBatteryMonitor
                 {
                     case "getInit":
                         await HandleGetInitAsync();
+                        break;
+
+                    case "getUpdateState":
+                        SendUpdateState();
+                        break;
+                    case "checkUpdate":
+                        await AppUpdater.Instance.CheckAsync(false);
+                        break;
+                    case "cancelUpdate":
+                        AppUpdater.Instance.Cancel();
+                        break;
+                    case "installUpdate":
+                        AppUpdater.Instance.Install();
+                        break;
+                    case "ignoreUpdate":
+                        AppUpdater.Instance.Ignore();
+                        break;
+                    case "autoUpdate":
+                        AppUpdater.Instance.AutoCheck = json.RootElement.GetProperty("enabled").GetBoolean();
                         break;
 
                     case "saveDevices":
@@ -193,10 +213,21 @@ namespace BluetoothBatteryMonitor
                     .OrderBy(d => d.name, StringComparer.OrdinalIgnoreCase)
                     .ToList();
 
-                var initJson = JsonSerializer.Serialize(new { devices });
+                var initJson = JsonSerializer.Serialize(new { devices, version = AppUpdater.DisplayVersion, autoCheck = AppUpdater.Instance.AutoCheck });
                 await _webView!.CoreWebView2.ExecuteScriptAsync($"window.onInit({initJson})");
+                SendUpdateState();
+                if (!AppUpdater.Instance.Status.StartsWith("Successfully updated", StringComparison.Ordinal))
+                    _ = AppUpdater.Instance.CheckAsync(true);
             }
             catch { }
+        }
+
+        private void SendUpdateState()
+        {
+            if (IsDisposed || _webView?.CoreWebView2 == null) return;
+            var updater = AppUpdater.Instance;
+            var json = JsonSerializer.Serialize(new { status = updater.Status, busy = updater.Busy, canInstall = updater.CanInstall, automatic = updater.AutomaticResult });
+            _webView.CoreWebView2.PostWebMessageAsJson(json);
         }
 
         private void HandleSaveDevices(JsonElement root)
@@ -243,6 +274,8 @@ namespace BluetoothBatteryMonitor
         {
             if (disposing)
             {
+                AppUpdater.Instance.Changed -= SendUpdateState;
+                AppUpdater.Instance.Cancel();
                 if (_webView != null)
                 {
                     if (_webView.CoreWebView2 != null)
