@@ -20,6 +20,7 @@ namespace BluetoothBatteryMonitor
         #region Private Fields
         private readonly Dictionary<string, DeviceInfo> _devices;
         private readonly Dictionary<string, NotifyIcon> _trayIcons;
+        private NotifyIcon? _accessIcon;
         private readonly Dictionary<string, Icon> _deviceCurrentIcons;
         private readonly Dictionary<string, ToolStripItem> _deviceMenuItems;
         private readonly Dictionary<string, ToolStripItem> _deviceLastUpdateMenuItems;
@@ -143,7 +144,7 @@ namespace BluetoothBatteryMonitor
             _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             _disposeCts = new CancellationTokenSource();
 
-            _devices = new Dictionary<string, DeviceInfo>();
+            _devices = new Dictionary<string, DeviceInfo>(StringComparer.OrdinalIgnoreCase);
             _trayIcons = new Dictionary<string, NotifyIcon>();
             _deviceCurrentIcons = new Dictionary<string, Icon>();
             _deviceMenuItems = new Dictionary<string, ToolStripItem>();
@@ -255,8 +256,8 @@ namespace BluetoothBatteryMonitor
                 }
             }, null);
 
-            await uiRefreshComplete.Task.ConfigureAwait(false);
-            await VerifyDeviceStatesAsync().ConfigureAwait(false);
+            await uiRefreshComplete.Task;
+            await VerifyDeviceStatesAsync();
         }
 
         private void RefreshTrayIconsForDpiChange()
@@ -287,6 +288,7 @@ namespace BluetoothBatteryMonitor
                 catch { }
             }
 
+            RefreshTrayVisibility();
             try
             {
                 oldIconFull?.Dispose();
@@ -439,19 +441,14 @@ namespace BluetoothBatteryMonitor
             };
         }
 
-        // Disconnected devices are hidden from the tray entirely; connected
-        // devices show their battery-level icon.
+        // Visibility is reconciled across all devices after updating their state.
         private void ApplyDeviceIconState(string deviceName, DeviceInfo deviceInfo, NotifyIcon icon)
         {
-            var batteryIcon = GetBatteryIcon(deviceInfo.BatteryLevel);
+            var batteryIcon = GetBatteryIcon(deviceInfo.IsConnected ? deviceInfo.BatteryLevel : null);
             _deviceCurrentIcons[deviceName] = batteryIcon;
 
             if (icon.Icon != batteryIcon)
                 icon.Icon = batteryIcon;
-
-            bool shouldBeVisible = deviceInfo.IsConnected;
-            if (icon.Visible != shouldBeVisible)
-                icon.Visible = shouldBeVisible;
         }
         #endregion
 
@@ -460,7 +457,7 @@ namespace BluetoothBatteryMonitor
         {
             foreach (var name in LoadDeviceNamesFromRegistry())
             {
-                _devices[name] = new DeviceInfo { Name = name };
+                _devices[name] = new DeviceInfo(name);
             }
         }
 
@@ -493,8 +490,8 @@ namespace BluetoothBatteryMonitor
                 var notifyIcon = new NotifyIcon
                 {
                     Icon = GetBatteryIcon(deviceInfo.BatteryLevel),
-                    Visible = deviceInfo.IsConnected,
-                    Text = $"{deviceName}\nScanning..."
+                    Visible = false,
+                    Text = BuildNotifyIconText(deviceName, deviceInfo)
                 };
 
                 notifyIcon.DoubleClick += OnOpenBluetoothSettings;
@@ -503,6 +500,32 @@ namespace BluetoothBatteryMonitor
                 _trayIcons[deviceName] = notifyIcon;
                 _deviceCurrentIcons[deviceName] = notifyIcon.Icon;
             }
+            RefreshTrayVisibility();
+        }
+
+        private void RefreshTrayVisibility()
+        {
+            var devices = _devices.Values.Select(d => new TrayDevice(
+                d.Name, d.IsConnected, _trayIcons.TryGetValue(d.Name, out var icon) && icon.Visible)).ToArray();
+            var visible = TrayVisibility.SelectVisible(devices);
+            if (_accessIcon == null)
+            {
+                var menu = new ContextMenuStrip();
+                menu.Items.Add("Configuration", null, OnConfigureClick);
+                menu.Items.Add("-");
+                menu.Items.Add("Exit", null, OnExitClick);
+                _accessIcon = new NotifyIcon { Text = "Bluetooth Battery Monitor\nNo devices configured", ContextMenuStrip = menu };
+                _accessIcon.DoubleClick += OnConfigureClick;
+            }
+            _accessIcon.Icon = GetBatteryIcon(null);
+            // Show replacements first, so changing connections never removes
+            // the last entry point to configuration from the Windows tray.
+            if (devices.Length == 0) _accessIcon.Visible = true;
+            foreach (var name in visible)
+                if (_trayIcons.TryGetValue(name, out var icon)) icon.Visible = true;
+            foreach (var pair in _trayIcons)
+                if (!visible.Contains(pair.Key)) pair.Value.Visible = false;
+            if (devices.Length > 0) _accessIcon.Visible = false;
         }
 
         private void OnOpenBluetoothSettings(object? sender, EventArgs e)
@@ -605,7 +628,7 @@ namespace BluetoothBatteryMonitor
 
             foreach (var device in _devices.Values)
             {
-                try { device.BluetoothDevice?.Dispose(); } catch { }
+                ReleaseConnection(device);
             }
             _devices.Clear();
             _hfpInstanceIdCache.Clear();
@@ -667,182 +690,213 @@ namespace BluetoothBatteryMonitor
             InitializeDeviceWatcher();
         }
 
+        // Watchers and WinRT events arrive on worker threads. Keep all device
+        // state and tray decisions on one context, including async continuations.
+        private Task RunOnUiAsync(Func<Task> action)
+        {
+            var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            try
+            {
+                _syncContext.Post(async _ =>
+                {
+                    try { if (!_disposeCts.IsCancellationRequested) await action(); }
+                    catch { }
+                    finally { completion.TrySetResult(); }
+                }, null);
+            }
+            catch (InvalidOperationException) { completion.TrySetResult(); }
+            catch (System.ComponentModel.InvalidAsynchronousStateException) { completion.TrySetResult(); }
+            return completion.Task;
+        }
+
+        private bool IsCurrentWatcher(DeviceWatcher watcher) =>
+            ReferenceEquals(watcher, _deviceWatcher) || ReferenceEquals(watcher, _classicDeviceWatcher);
+
         private async void OnDeviceAdded(DeviceWatcher sender, DeviceInformation args)
         {
-            await ProcessDeviceAsync(args);
+            await RunOnUiAsync(async () =>
+            {
+                if (IsCurrentWatcher(sender)) await ProcessDeviceAsync(args);
+            });
         }
 
         private async void OnDeviceUpdated(DeviceWatcher sender, DeviceInformationUpdate args)
         {
-            var deviceName = FindDeviceNameById(args.Id);
-            if (deviceName == null)
-                return;
-
-            foreach (var key in BatteryPropertyKeys)
+            await RunOnUiAsync(async () =>
             {
-                if (args.Properties.TryGetValue(key, out var batteryValue))
+                if (!IsCurrentWatcher(sender)) return;
+                var deviceName = FindDeviceNameById(args.Id);
+                if (deviceName == null)
                 {
-                    TryUpdateBatteryLevelFromValue(deviceName, batteryValue);
+                    await VerifyDeviceStatesCoreAsync();
                     return;
                 }
-            }
-
-            if (_devices.TryGetValue(deviceName, out var deviceInfo) &&
-                deviceInfo.ConnectionType == DeviceConnectionType.BluetoothClassic)
-            {
-                await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
-            }
+                // A disconnect can arrive in Updated without a Removed event,
+                // and may contain a stale battery (including zero) in the same packet.
+                if (args.Properties.TryGetValue("System.Devices.Aep.IsConnected", out var connected) && connected is false)
+                {
+                    HandleDeviceDisconnected(deviceName);
+                    await VerifyDeviceStatesCoreAsync();
+                    return;
+                }
+                var entry = _devices[deviceName];
+                if (!IsTransportConnected(entry))
+                {
+                    HandleDeviceDisconnected(deviceName);
+                    await VerifyDeviceStatesCoreAsync();
+                    return;
+                }
+                foreach (var key in BatteryPropertyKeys)
+                {
+                    if (args.Properties.TryGetValue(key, out var batteryValue))
+                    {
+                        TryUpdateBatteryLevelFromValue(deviceName, batteryValue);
+                        return;
+                    }
+                }
+                if (entry.ConnectionType == DeviceConnectionType.BluetoothClassic)
+                    await TryReadHfpBatteryViaCfgMgrAsync(deviceName);
+            });
         }
 
-        private void OnDeviceRemoved(DeviceWatcher sender, DeviceInformationUpdate args)
+        private async void OnDeviceRemoved(DeviceWatcher sender, DeviceInformationUpdate args)
         {
-            var deviceName = FindDeviceNameById(args.Id);
-            if (deviceName != null)
+            await RunOnUiAsync(async () =>
             {
-                HandleDeviceDisconnected(deviceName);
-            }
+                if (!IsCurrentWatcher(sender)) return;
+                var deviceName = FindDeviceNameById(args.Id);
+                if (deviceName != null) HandleDeviceDisconnected(deviceName);
+                await VerifyDeviceStatesCoreAsync();
+            });
         }
 
         private void OnEnumerationCompleted(DeviceWatcher sender, object args) { }
         private void OnWatcherStopped(DeviceWatcher sender, object args) { }
 
+        private bool IsCurrentDevice(DeviceInfo entry, long generation) =>
+            !_disposeCts.IsCancellationRequested && entry.Generation == generation &&
+            _devices.TryGetValue(entry.Name, out var current) && ReferenceEquals(current, entry);
+
+        private static bool IsTransportConnected(DeviceInfo entry)
+        {
+            try
+            {
+                return entry.BluetoothDevice?.ConnectionStatus == BluetoothConnectionStatus.Connected ||
+                    entry.ClassicDevice?.ConnectionStatus == BluetoothConnectionStatus.Connected;
+            }
+            catch { return false; }
+        }
+
         private async Task ProcessDeviceAsync(DeviceInformation deviceInfo)
         {
+            if (!_devices.TryGetValue(deviceInfo.Name, out var entry)) return;
+            long previousGeneration = entry.Generation;
+            await _deviceLock.WaitAsync(_disposeCts.Token);
             try
             {
-                var deviceName = deviceInfo.Name;
-                if (string.IsNullOrEmpty(deviceName) || !_devices.ContainsKey(deviceName))
+                if (!IsCurrentDevice(entry, previousGeneration)) return;
+                if (entry.IsConnected && IsTransportConnected(entry)) return;
+                HandleDeviceDisconnected(entry.Name);
+                long generation = entry.BeginConnection(deviceInfo.Id);
+                if (deviceInfo.Properties.TryGetValue("System.Devices.Aep.IsConnected", out var connected) && connected is false) return;
+
+                bool classic = deviceInfo.Id.StartsWith("Bluetooth#", StringComparison.OrdinalIgnoreCase) &&
+                    !deviceInfo.Id.Contains("BluetoothLE", StringComparison.OrdinalIgnoreCase);
+                if (classic)
+                {
+                    var device = await BluetoothDevice.FromIdAsync(deviceInfo.Id);
+                    if (device == null) return;
+                    if (!IsCurrentDevice(entry, generation)) { device.Dispose(); return; }
+                    entry.ClassicDevice = device;
+                    device.ConnectionStatusChanged += OnClassicConnectionStatusChanged;
+                    entry.ConnectionType = DeviceConnectionType.BluetoothClassic;
+                }
+                else
+                {
+                    var device = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
+                    if (device == null) return;
+                    if (!IsCurrentDevice(entry, generation)) { device.Dispose(); return; }
+                    entry.BluetoothDevice = device;
+                    device.ConnectionStatusChanged += OnLeConnectionStatusChanged;
+                    entry.ConnectionType = DeviceConnectionType.BluetoothLe;
+                }
+
+                // An object or cached property does not prove a live connection.
+                if (!entry.ConfirmConnection(generation, IsTransportConnected(entry)))
+                {
+                    HandleDeviceDisconnected(entry.Name);
                     return;
-
-                await _deviceLock.WaitAsync(_disposeCts.Token).ConfigureAwait(false);
-                try
-                {
-                    var entry = _devices[deviceName];
-                    entry.DeviceId = deviceInfo.Id;
-
-                    // Battery may be reported directly via AEP properties.
-                    bool gotBatteryFromProps = TryUpdateBatteryFromProperties(deviceInfo, deviceName);
-
-                    // Classic Bluetooth (e.g. HFP audio) connection status is
-                    // reliable, so treat it as connected and read battery via CfgMgr32.
-                    bool looksLikeClassic = deviceInfo.Id.StartsWith("Bluetooth#", StringComparison.OrdinalIgnoreCase) &&
-                                           !deviceInfo.Id.Contains("BluetoothLE", StringComparison.OrdinalIgnoreCase);
-                    if (looksLikeClassic)
-                    {
-                        MarkDeviceConnected(entry, deviceName, DeviceConnectionType.BluetoothClassic);
-                        if (!entry.BatteryLevel.HasValue)
-                            await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
-                        return;
-                    }
-
-                    // Bluetooth LE: the "connected" enumeration can surface transient
-                    // or unpaired association endpoints (devices that rotate their
-                    // advertised address) that cannot actually be opened. Only treat
-                    // the device as connected if we can open it; otherwise it is a
-                    // phantom endpoint and we leave it hidden rather than showing a
-                    // connected, empty-battery icon.
-                    BluetoothLEDevice? leDevice = null;
-                    try
-                    {
-                        leDevice = await BluetoothLEDevice.FromIdAsync(deviceInfo.Id);
-                    }
-                    catch { }
-
-                    if (leDevice != null)
-                    {
-                        entry.BluetoothDevice = leDevice;
-                        MarkDeviceConnected(entry, deviceName, DeviceConnectionType.BluetoothLe);
-                        await ConnectToBatteryServiceAsync(leDevice, deviceName).ConfigureAwait(false);
-                        return;
-                    }
-
-                    // Could not open the device. Honour a battery value if one
-                    // already arrived via AEP properties; otherwise leave it hidden.
-                    if (gotBatteryFromProps)
-                    {
-                        MarkDeviceConnected(entry, deviceName, DeviceConnectionType.BluetoothLe);
-                    }
                 }
-                finally
-                {
-                    _deviceLock.Release();
-                }
+                UpdateDeviceIcon(entry.Name);
+                TryUpdateBatteryFromProperties(deviceInfo, entry.Name);
+                if (classic) await TryReadHfpBatteryViaCfgMgrAsync(entry.Name);
+                else await ConnectToBatteryServiceAsync(entry, generation);
             }
             catch { }
+            finally { _deviceLock.Release(); }
         }
 
-        private void MarkDeviceConnected(DeviceInfo entry, string deviceName, DeviceConnectionType connectionType)
+        private async void OnLeConnectionStatusChanged(BluetoothLEDevice sender, object args)
         {
-            entry.IsConnected = true;
-            entry.ConnectionType = connectionType;
-            ScheduleStateVerification();
-            _syncContext.Post(_ => UpdateDeviceIcon(deviceName), null);
+            await RunOnUiAsync(async () =>
+            {
+                var entry = _devices.Values.FirstOrDefault(d => ReferenceEquals(d.BluetoothDevice, sender));
+                if (entry != null && !IsTransportConnected(entry)) HandleDeviceDisconnected(entry.Name);
+                await VerifyDeviceStatesCoreAsync();
+            });
         }
 
-        private async Task ConnectToBatteryServiceAsync(BluetoothLEDevice device, string deviceName)
+        private async void OnClassicConnectionStatusChanged(BluetoothDevice sender, object args)
         {
+            await RunOnUiAsync(async () =>
+            {
+                var entry = _devices.Values.FirstOrDefault(d => ReferenceEquals(d.ClassicDevice, sender));
+                if (entry != null && !IsTransportConnected(entry)) HandleDeviceDisconnected(entry.Name);
+                await VerifyDeviceStatesCoreAsync();
+            });
+        }
+
+        private async Task ConnectToBatteryServiceAsync(DeviceInfo entry, long generation)
+        {
+            GattDeviceService? service = null;
             try
             {
-                var gattResult = await device.GetGattServicesForUuidAsync(BatteryServiceUuid).AsTask().ConfigureAwait(false);
-                if (gattResult.Status != GattCommunicationStatus.Success || gattResult.Services.Count == 0)
-                    return;
-
-                var batteryService = gattResult.Services[0];
-                var charResult = await batteryService.GetCharacteristicsForUuidAsync(BatteryLevelUuid).AsTask().ConfigureAwait(false);
-                
-                if (charResult.Status != GattCommunicationStatus.Success || charResult.Characteristics.Count == 0)
-                    return;
-
-                var characteristic = charResult.Characteristics[0];
-                _devices[deviceName].BatteryCharacteristic = characteristic;
-
-                await ReadBatteryLevelAsync(characteristic, deviceName).ConfigureAwait(false);
-                await SubscribeToBatteryNotificationsAsync(characteristic, deviceName).ConfigureAwait(false);
+                if (!IsCurrentDevice(entry, generation) || !entry.IsConnected || entry.BluetoothDevice == null) return;
+                var result = await entry.BluetoothDevice.GetGattServicesForUuidAsync(BatteryServiceUuid, BluetoothCacheMode.Uncached);
+                if (result.Status != GattCommunicationStatus.Success) return;
+                service = result.Services.FirstOrDefault();
+                foreach (var extra in result.Services.Skip(1)) extra.Dispose();
+                if (service == null || !IsCurrentDevice(entry, generation) || !IsTransportConnected(entry)) return;
+                var chars = await service.GetCharacteristicsForUuidAsync(BatteryLevelUuid, BluetoothCacheMode.Uncached);
+                if (chars.Status != GattCommunicationStatus.Success || !IsCurrentDevice(entry, generation) || !IsTransportConnected(entry)) return;
+                var characteristic = chars.Characteristics.FirstOrDefault();
+                if (characteristic == null) return;
+                entry.BatteryService = service;
+                service = null; // Connection cleanup now owns this service.
+                entry.BatteryCharacteristic = characteristic;
+                characteristic.ValueChanged += OnBatteryLevelChanged;
+                var read = await characteristic.ReadValueAsync(BluetoothCacheMode.Uncached);
+                if (read.Status == GattCommunicationStatus.Success && read.Value.Length > 0)
+                    UpdateBatteryLevel(entry, generation, DataReader.FromBuffer(read.Value).ReadByte());
+                if (!IsCurrentDevice(entry, generation) || !IsTransportConnected(entry)) return;
+                if (characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Notify))
+                    await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Notify);
+                else if (characteristic.CharacteristicProperties.HasFlag(GattCharacteristicProperties.Indicate))
+                    await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(GattClientCharacteristicConfigurationDescriptorValue.Indicate);
             }
             catch { }
+            finally { service?.Dispose(); }
         }
 
-        private async Task SubscribeToBatteryNotificationsAsync(GattCharacteristic characteristic, string deviceName)
+        private async void OnBatteryLevelChanged(GattCharacteristic sender, GattValueChangedEventArgs args)
         {
-            try
+            await RunOnUiAsync(() =>
             {
-                var notifyResult = await characteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-                    GattClientCharacteristicConfigurationDescriptorValue.Notify
-                ).AsTask().ConfigureAwait(false);
-
-                if (notifyResult == GattCommunicationStatus.Success)
-                {
-                    characteristic.ValueChanged += (sender, args) => OnBatteryLevelChanged(sender, args, deviceName);
-                }
-            }
-            catch { }
-        }
-
-        private async Task ReadBatteryLevelAsync(GattCharacteristic characteristic, string deviceName)
-        {
-            try
-            {
-                var readResult = await characteristic.ReadValueAsync().AsTask(_disposeCts.Token).ConfigureAwait(false);
-                
-                if (readResult.Status == GattCommunicationStatus.Success)
-                {
-                    var reader = DataReader.FromBuffer(readResult.Value);
-                    byte batteryLevel = reader.ReadByte();
-                    UpdateBatteryLevel(deviceName, batteryLevel);
-                }
-            }
-            catch { }
-        }
-
-        private void OnBatteryLevelChanged(GattCharacteristic sender, GattValueChangedEventArgs args, string deviceName)
-        {
-            try
-            {
-                var reader = DataReader.FromBuffer(args.CharacteristicValue);
-                byte batteryLevel = reader.ReadByte();
-                UpdateBatteryLevel(deviceName, batteryLevel);
-            }
-            catch { }
+                var entry = _devices.Values.FirstOrDefault(d => ReferenceEquals(d.BatteryCharacteristic, sender));
+                if (entry != null && args.CharacteristicValue.Length > 0)
+                    UpdateBatteryLevel(entry, entry.Generation, DataReader.FromBuffer(args.CharacteristicValue).ReadByte());
+                return Task.CompletedTask;
+            });
         }
 
         private bool TryUpdateBatteryFromProperties(DeviceInformation deviceInfo, string deviceName)
@@ -902,67 +956,47 @@ namespace BluetoothBatteryMonitor
         
         private async Task<bool> TryReadHfpBatteryViaCfgMgrAsync(string deviceName)
         {
-            return await Task.Run(() =>
+            if (!_devices.TryGetValue(deviceName, out var entry) || !entry.IsConnected || entry.ClassicDevice == null) return false;
+            long generation = entry.Generation;
+            string address = entry.ClassicDevice.BluetoothAddress.ToString("X12", CultureInfo.InvariantCulture);
+            _hfpInstanceIdCache.TryGetValue(deviceName, out var cachedInstanceId);
+            // Only registry/driver IO runs on a worker. Publish on the UI context
+            // after checking that the same connection still owns the result.
+            var result = await Task.Run<(byte? Battery, string? InstanceId)>(() =>
             {
                 try
                 {
-                    // Check cache first for fast path
-                    if (_hfpInstanceIdCache.TryGetValue(deviceName, out var cachedInstanceId))
-                    {
-                        var battery = GetHfpBatteryLevel(cachedInstanceId);
-                        if (battery.HasValue)
-                        {
-                            UpdateBatteryLevel(deviceName, battery.Value);
-                            return true;
-                        }
-                        // Cache miss - device may have reconnected with new instance, clear and re-scan
-                        _hfpInstanceIdCache.Remove(deviceName);
-                    }
-                    
+                    if (cachedInstanceId != null && GetHfpBatteryLevel(cachedInstanceId) is byte cached)
+                        return (cached, cachedInstanceId);
                     using var enumKey = Registry.LocalMachine.OpenSubKey(@"SYSTEM\CurrentControlSet\Enum\BTHENUM");
-                    if (enumKey == null)
-                        return false;
-                    
+                    if (enumKey == null) return (null, null);
                     foreach (var subKeyName in enumKey.GetSubKeyNames())
                     {
-                        if (!subKeyName.Contains("111e", StringComparison.OrdinalIgnoreCase) &&
-                            !subKeyName.Contains("111E", StringComparison.OrdinalIgnoreCase))
-                            continue;
-                        
+                        if (!subKeyName.Contains("111e", StringComparison.OrdinalIgnoreCase)) continue;
                         using var serviceKey = enumKey.OpenSubKey(subKeyName);
                         if (serviceKey == null) continue;
-                        
                         foreach (var instanceName in serviceKey.GetSubKeyNames())
                         {
-                            using var instanceKey = serviceKey.OpenSubKey(instanceName);
-                            if (instanceKey == null) continue;
-                            
-                            var friendlyName = instanceKey.GetValue("FriendlyName") as string;
-                            if (string.IsNullOrEmpty(friendlyName) || 
-                                !friendlyName.Contains(deviceName, StringComparison.OrdinalIgnoreCase))
-                                continue;
-                            
+                            // Match the connected radio address, not a substring
+                            // of a friendly name shared by another paired device.
+                            if (!instanceName.Contains(address, StringComparison.OrdinalIgnoreCase)) continue;
                             var instanceId = $"BTHENUM\\{subKeyName}\\{instanceName}";
-                            var battery = GetHfpBatteryLevel(instanceId);
-                            if (battery.HasValue)
-                            {
-                                // Cache for future lookups
-                                _hfpInstanceIdCache[deviceName] = instanceId;
-                                UpdateBatteryLevel(deviceName, battery.Value);
-                                return true;
-                            }
+                            if (GetHfpBatteryLevel(instanceId) is byte battery) return (battery, instanceId);
                         }
                     }
-                    
-                    return false;
                 }
-                catch
-                {
-                    return false;
-                }
-            }).ConfigureAwait(false);
+                catch { }
+                return (null, null);
+            });
+            if (!IsCurrentDevice(entry, generation)) return false;
+            if (!IsTransportConnected(entry)) { HandleDeviceDisconnected(deviceName); return false; }
+            if (result.InstanceId == null) _hfpInstanceIdCache.Remove(deviceName);
+            else _hfpInstanceIdCache[deviceName] = result.InstanceId;
+            if (result.Battery is not byte level) return false;
+            UpdateBatteryLevel(entry, generation, level);
+            return true;
         }
-        
+
         private byte? GetHfpBatteryLevel(string instanceId)
         {
             try
@@ -1023,13 +1057,16 @@ namespace BluetoothBatteryMonitor
 
         private void UpdateBatteryLevel(string deviceName, byte batteryLevel)
         {
-            if (_devices.TryGetValue(deviceName, out var device))
-            {
-                device.BatteryLevel = batteryLevel;
-                device.LastUpdate = DateTime.Now;
-                ScheduleStateVerification();
-                _syncContext.Post(_ => UpdateDeviceIcon(deviceName), null);
-            }
+            if (_devices.TryGetValue(deviceName, out var entry))
+                UpdateBatteryLevel(entry, entry.Generation, batteryLevel);
+        }
+
+        private void UpdateBatteryLevel(DeviceInfo entry, long generation, byte batteryLevel)
+        {
+            if (!IsCurrentDevice(entry, generation)) return;
+            if (!IsTransportConnected(entry)) { HandleDeviceDisconnected(entry.Name); return; }
+            if (entry.TryUpdateBattery(generation, batteryLevel, DateTime.Now))
+                UpdateDeviceIcon(entry.Name);
         }
 
         private void UpdateDeviceIcon(string deviceName)
@@ -1043,6 +1080,7 @@ namespace BluetoothBatteryMonitor
 
                 UpdateTrayIconText(deviceName, deviceInfo);
                 UpdateContextMenuItems(deviceName);
+                RefreshTrayVisibility();
             }
             catch (ObjectDisposedException) { }
             catch { }
@@ -1084,6 +1122,8 @@ namespace BluetoothBatteryMonitor
                 if (!_devices.TryGetValue(deviceName, out var deviceInfo))
                     continue;
 
+                if (deviceInfo.IsConnected && !IsTransportConnected(deviceInfo))
+                    HandleDeviceDisconnected(deviceName);
                 UpdateTrayIconText(deviceName, deviceInfo);
                 UpdateContextMenuItems(deviceName);
             }
@@ -1106,10 +1146,7 @@ namespace BluetoothBatteryMonitor
 
         private static string GetStatusText(DeviceInfo deviceInfo)
         {
-            if (deviceInfo.IsConnected)
-                return deviceInfo.BatteryLevel.HasValue ? $"Battery: {deviceInfo.BatteryLevel}%" : "Connected";
-
-            return string.IsNullOrEmpty(deviceInfo.DeviceId) ? "Scanning..." : "Disconnected";
+            return deviceInfo.StatusText;
         }
 
         private static string BuildNotifyIconText(string deviceName, DeviceInfo deviceInfo)
@@ -1171,25 +1208,39 @@ namespace BluetoothBatteryMonitor
             return $"Updated: {seconds} seconds ago";
         }
 
+        private void ReleaseConnection(DeviceInfo entry)
+        {
+            entry.Disconnect(); // Invalidate reads before disposing native handles.
+            try
+            {
+                if (entry.BatteryCharacteristic != null)
+                    entry.BatteryCharacteristic.ValueChanged -= OnBatteryLevelChanged;
+            }
+            catch { }
+            entry.BatteryCharacteristic = null;
+            try { entry.BatteryService?.Dispose(); } catch { }
+            entry.BatteryService = null;
+            if (entry.BluetoothDevice != null)
+            {
+                try { entry.BluetoothDevice.ConnectionStatusChanged -= OnLeConnectionStatusChanged; } catch { }
+                try { entry.BluetoothDevice.Dispose(); } catch { }
+                entry.BluetoothDevice = null;
+            }
+            if (entry.ClassicDevice != null)
+            {
+                try { entry.ClassicDevice.ConnectionStatusChanged -= OnClassicConnectionStatusChanged; } catch { }
+                try { entry.ClassicDevice.Dispose(); } catch { }
+                entry.ClassicDevice = null;
+            }
+            entry.ConnectionType = DeviceConnectionType.Unknown;
+            _hfpInstanceIdCache.Remove(entry.Name);
+        }
+
         private void HandleDeviceDisconnected(string deviceName)
         {
-            if (!_devices.TryGetValue(deviceName, out var deviceInfo) || !deviceInfo.IsConnected)
-                return;
-
-            deviceInfo.IsConnected = false;
-            deviceInfo.BatteryLevel = null;
-            deviceInfo.LastUpdate = null;
-            deviceInfo.BatteryCharacteristic = null;
-            deviceInfo.ConnectionType = DeviceConnectionType.Unknown;
-
-            try { deviceInfo.BluetoothDevice?.Dispose(); } catch { }
-            deviceInfo.BluetoothDevice = null;
-            
-            // Clear cached HFP instance ID on disconnect
-            _hfpInstanceIdCache.Remove(deviceName);
-
-            _syncContext.Post(_ => UpdateDeviceIcon(deviceName), null);
-            ScheduleStateVerification();
+            if (!_devices.TryGetValue(deviceName, out var entry)) return;
+            ReleaseConnection(entry);
+            UpdateDeviceIcon(deviceName);
         }
 
         private string? FindDeviceNameById(string deviceId)
@@ -1214,72 +1265,50 @@ namespace BluetoothBatteryMonitor
             catch (ObjectDisposedException) { }
         }
 
-        private async Task VerifyDeviceStatesAsync()
-        {
-            if (Interlocked.CompareExchange(ref _stateVerificationRunning, 1, 0) == 1)
-                return;
+        private Task VerifyDeviceStatesAsync() => RunOnUiAsync(VerifyDeviceStatesCoreAsync);
 
+        private async Task VerifyDeviceStatesCoreAsync()
+        {
+            if (Interlocked.CompareExchange(ref _stateVerificationRunning, 1, 0) == 1) return;
             try
             {
+                var snapshot = _devices.Values.Select(entry => (Entry: entry, entry.Generation)).ToArray();
                 var selector = BluetoothLEDevice.GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus.Connected);
                 var classicSelector = BluetoothDevice.GetDeviceSelectorFromConnectionStatus(BluetoothConnectionStatus.Connected);
-                var connectedDevices = await DeviceInformation.FindAllAsync(selector).AsTask().ConfigureAwait(false);
-                var classicDevices = await DeviceInformation.FindAllAsync(classicSelector).AsTask().ConfigureAwait(false);
-                var connectedByName = new Dictionary<string, DeviceInformation>(StringComparer.OrdinalIgnoreCase);
+                var properties = new[] { "System.Devices.Aep.IsConnected" };
+                var le = await DeviceInformation.FindAllAsync(selector, properties, DeviceInformationKind.AssociationEndpoint);
+                var classic = await DeviceInformation.FindAllAsync(classicSelector, properties, DeviceInformationKind.AssociationEndpoint);
+                var candidates = le.Concat(classic).ToLookup(d => d.Name, StringComparer.OrdinalIgnoreCase);
 
-                foreach (var device in connectedDevices)
+                foreach (var item in snapshot)
                 {
-                    if (!string.IsNullOrWhiteSpace(device.Name))
-                        connectedByName[device.Name] = device;
-                }
-
-                foreach (var device in classicDevices)
-                {
-                    if (!string.IsNullOrWhiteSpace(device.Name) && !connectedByName.ContainsKey(device.Name))
-                        connectedByName[device.Name] = device;
-                }
-
-                foreach (var kvp in _devices.ToArray())
-                {
-                    var deviceName = kvp.Key;
-                    var deviceInfo = kvp.Value;
-                    bool isCurrentlyConnected = deviceInfo.IsConnected;
-                    bool isActuallyConnected = connectedByName.ContainsKey(deviceName);
-
-                    if (isActuallyConnected)
+                    var entry = item.Entry;
+                    // A watcher event or configuration change during enumeration
+                    // takes precedence over this older enumeration result.
+                    if (!IsCurrentDevice(entry, item.Generation)) continue;
+                    if (entry.IsConnected && IsTransportConnected(entry))
                     {
-                        if (connectedByName.TryGetValue(deviceName, out var connectedDeviceInfo))
-                        {
-                            bool needsRefresh = !isCurrentlyConnected ||
-                                                !deviceInfo.BatteryLevel.HasValue ||
-                                                string.IsNullOrEmpty(deviceInfo.DeviceId);
-
-                            if (needsRefresh)
-                            {
-                                await ProcessDeviceAsync(connectedDeviceInfo).ConfigureAwait(false);
-                            }
-                            else if (deviceInfo.ConnectionType == DeviceConnectionType.BluetoothClassic)
-                            {
-                                await TryReadHfpBatteryViaCfgMgrAsync(deviceName).ConfigureAwait(false);
-                            }
-                        }
+                        if (entry.ClassicDevice != null) await TryReadHfpBatteryViaCfgMgrAsync(entry.Name);
+                        else if (entry.BatteryCharacteristic == null)
+                            await ConnectToBatteryServiceAsync(entry, entry.Generation);
+                        continue;
                     }
-                    else if (!isActuallyConnected && isCurrentlyConnected)
+                    HandleDeviceDisconnected(entry.Name);
+                    foreach (var candidate in candidates[entry.Name])
                     {
-                        HandleDeviceDisconnected(deviceName);
+                        if (!_devices.TryGetValue(entry.Name, out var current) || !ReferenceEquals(entry, current)) break;
+                        await ProcessDeviceAsync(candidate);
+                        if (entry.IsConnected) break;
                     }
                 }
             }
             catch { }
-            finally
-            {
-                Interlocked.Exchange(ref _stateVerificationRunning, 0);
-            }
+            finally { Interlocked.Exchange(ref _stateVerificationRunning, 0); }
         }
 
         private async Task RetryDisconnectedDevicesAsync()
         {
-            await VerifyDeviceStatesAsync().ConfigureAwait(false);
+            await VerifyDeviceStatesAsync();
         }
         #endregion
 
@@ -1339,20 +1368,13 @@ namespace BluetoothBatteryMonitor
                     _startupConfigurationTimer = null;
                 }
 
-                foreach (var device in _devices.Values)
+                foreach (var device in _devices.Values) ReleaseConnection(device);
+                if (_accessIcon != null)
                 {
-                    if (device.BatteryCharacteristic != null)
-                    {
-                        try
-                        {
-                            device.BatteryCharacteristic.WriteClientCharacteristicConfigurationDescriptorAsync(
-                                GattClientCharacteristicConfigurationDescriptorValue.None
-                            ).AsTask().Wait(1000);
-                        }
-                        catch { }
-                    }
-
-                    device.BluetoothDevice?.Dispose();
+                    _accessIcon.Visible = false;
+                    _accessIcon.ContextMenuStrip?.Dispose();
+                    _accessIcon.Dispose();
+                    _accessIcon = null;
                 }
 
                 _uiRefreshTimer.Stop();
@@ -1400,15 +1422,13 @@ namespace BluetoothBatteryMonitor
         #endregion
 
         #region DeviceInfo Class
-        private class DeviceInfo
+        private class DeviceInfo : MonitorDeviceState
         {
-            public string Name { get; set; } = string.Empty;
-            public int? BatteryLevel { get; set; }
-            public DateTime? LastUpdate { get; set; }
-            public bool IsConnected { get; set; }
+            public DeviceInfo(string name) : base(name) { }
             public BluetoothLEDevice? BluetoothDevice { get; set; }
+            public BluetoothDevice? ClassicDevice { get; set; }
+            public GattDeviceService? BatteryService { get; set; }
             public GattCharacteristic? BatteryCharacteristic { get; set; }
-            public string? DeviceId { get; set; }
             public DeviceConnectionType ConnectionType { get; set; }
         }
         #endregion

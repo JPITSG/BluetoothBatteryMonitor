@@ -2,7 +2,7 @@ PUBLISH_DIR = bin/Release/net8.0-windows10.0.19041.0/win-x64/publish
 RELEASE_DIR = release
 EXE = BluetoothBatteryMonitor.exe
 
-.PHONY: all frontend dotnet release clean
+.PHONY: all frontend dotnet release clean test
 
 all: release
 
@@ -25,6 +25,9 @@ release: dotnet
 	cp $(PUBLISH_DIR)/$(EXE) $(RELEASE_DIR)/$(EXE)
 	@echo ""
 	@echo "Output: $(RELEASE_DIR)/$(EXE)"
+
+test:
+	dotnet run --project tests/MonitorState.Tests.csproj -c Release
 
 clean:
 	rm -rf $(RELEASE_DIR)
