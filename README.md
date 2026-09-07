@@ -9,6 +9,7 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 - Supports Bluetooth LE (GATT Battery Service), Bluetooth Classic (HFP via CfgMgr32), and Windows device property fallback
 - WebView2 configuration dialog for selecting which paired devices to monitor
 - Device configuration persisted in Windows Registry (`HKCU\SOFTWARE\JPIT\BluetoothBatteryMonitor`)
+- Startup uses Windows battery properties and cached Bluetooth battery data for devices confirmed connected, then refreshes from the device
 - Automatic device connect/disconnect detection via DeviceWatcher with periodic state verification
 - DPI-aware with icon refresh on display/session changes (including RDP reconnect)
 - Single-instance enforcement
@@ -51,7 +52,7 @@ Output: `release/BluetoothBatteryMonitor.exe`
 
 ## Updates
 
-Version: **1.0.4**.
+Version: **1.0.5**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

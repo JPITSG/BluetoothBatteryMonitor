@@ -61,4 +61,31 @@ Check(!state.TryUpdateBattery(attempt, 0, DateTime.Now), "A previous connection'
 Check(state.BatteryLevel == null, "Reconnection must not inherit old battery readings.");
 Check(state.TryUpdateBattery(next, 88, DateTime.Now), "Accept current connection data.");
 Check(!state.TryUpdateBattery(next, 255, DateTime.Now) && state.BatteryLevel == 88, "Invalid battery data must not overwrite the valid reading.");
+// Startup: Windows' known battery should fill the connected mouse icon
+// without waiting for a live notification, while the other two stay hidden.
+Check(!new MonitorDeviceState("Offline").TrySeedBattery(0, 65), "A cached battery must never establish an offline device connection.");
+var mouse = new MonitorDeviceState("Mouse");
+var mouseSession = mouse.BeginConnection("mouse endpoint");
+Check(mouse.ConfirmConnection(mouseSession, true), "Confirm the mouse connection independently of its cached battery.");
+Check(mouse.TrySeedBattery(mouseSession, 67), "Use Windows' known battery immediately for the connected mouse.");
+Check(mouse.StatusText == "Battery: 67%", "Startup should display the known percentage before movement.");
+Check(mouse.LastUpdate == null, "A cached value has no known freshness timestamp.");
+var startupVisible = TrayVisibility.SelectVisible(new[] {
+    new TrayDevice("Headphones", false, true), new TrayDevice("Keyboard", false, false),
+    new TrayDevice(mouse.Name, mouse.IsConnected, false)
+});
+Check(startupVisible.SetEquals(new[] { "Mouse" }), "Startup must replace the disconnected fallback with the connected mouse.");
+var liveTime = new DateTime(2026, 9, 7, 12, 0, 0);
+Check(mouse.TryUpdateBattery(mouseSession, 66, liveTime), "A live value should replace the startup cache.");
+Check(!mouse.TrySeedBattery(mouseSession, 67) && mouse.BatteryLevel == 66 && mouse.LastUpdate == liveTime,
+    "A delayed Windows cache result must not overwrite a fresh notification or its timestamp.");
+mouse.Disconnect();
+Check(!mouse.TrySeedBattery(mouseSession, 67) && mouse.StatusText == "Disconnected", "A startup cache arriving after disconnect must not revive the icon's battery.");
+var reconnected = mouse.BeginConnection("mouse endpoint");
+Check(mouse.ConfirmConnection(reconnected, true), "Mouse reconnection should succeed.");
+Check(!mouse.TrySeedBattery(mouseSession, 67), "A cache read from the previous session must be rejected after reconnect.");
+Check(!mouse.TrySeedBattery(reconnected, 101), "Windows' unknown-battery sentinel must remain unknown.");
+Check(!mouse.TrySeedBattery(reconnected, -1), "Invalid cached battery must remain unknown.");
+Check(mouse.TrySeedBattery(reconnected, 0), "A confirmed connected device can have a genuine cached zero.");
+Check(!mouse.TrySeedBattery(reconnected, 50) && mouse.BatteryLevel == 0, "Zero is a known value, not an uninitialized battery.");
 Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, and battery status.");

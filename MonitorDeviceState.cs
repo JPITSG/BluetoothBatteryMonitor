@@ -40,6 +40,16 @@ internal class MonitorDeviceState
         LastUpdate = null;
     }
 
+    public bool TrySeedBattery(long generation, int level)
+    {
+        if (!IsConnected || generation != Generation || BatteryLevel.HasValue || level is < 0 or > 100) return false;
+        BatteryLevel = level;
+        // Windows does not supply the age of its cache. Do not label it as a
+        // fresh device reading; live reads/notifications will set LastUpdate.
+        LastUpdate = null;
+        return true;
+    }
+
     public bool TryUpdateBattery(long generation, int level, DateTime timestamp)
     {
         if (!IsConnected || generation != Generation || level is < 0 or > 100) return false;
