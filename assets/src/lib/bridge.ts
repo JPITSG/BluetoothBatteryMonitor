@@ -3,6 +3,12 @@ export interface DeviceEntry {
   isConfigured: boolean;
 }
 
+export interface DeviceStatus {
+  name: string;
+  online: boolean;
+  batteryLevel: number | null;
+}
+
 export interface DeviceState {
   devices: DeviceEntry[];
   loadingDevices: boolean;
@@ -12,6 +18,7 @@ export interface DeviceState {
 export interface InitData extends DeviceState {
   version: string;
   autoCheck: boolean;
+  deviceStatuses: DeviceStatus[];
 }
 
 export interface UpdateState {
@@ -27,6 +34,7 @@ export interface UpdateState {
 export type HostMessage =
   | ({ type: "init" } & InitData)
   | ({ type: "devices" } & DeviceState)
+  | { type: "deviceStatus"; deviceStatuses: DeviceStatus[] }
   | ({ type: "update" } & UpdateState);
 
 declare global {

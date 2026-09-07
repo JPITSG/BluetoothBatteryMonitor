@@ -43,16 +43,20 @@ Check(active.SetEquals(new[] { "A" }), "Hide disconnected B when A connects.");
 
 var state = new MonitorDeviceState("Headphones");
 Check(state.StatusText == "Disconnected" && state.BatteryLevel == null, "Startup must not fabricate a battery or connection.");
+Check(state.DisplayStatus == new DeviceStatus("Headphones", false, null), "Configuration starts offline without a fabricated battery percentage.");
 var attempt = state.BeginConnection("cached endpoint");
 Check(!state.ConfirmConnection(attempt, false), "An opened but disconnected endpoint must not be connected.");
 Check(!state.TryUpdateBattery(attempt, 0, DateTime.Now), "A cached zero must not establish a connection.");
 Check(state.StatusText == "Disconnected", "Cached battery data must not change disconnected status.");
 Check(state.ConfirmConnection(attempt, true), "A confirmed transport connection should be accepted.");
 Check(state.StatusText == "Connected (battery unknown)", "A new connection has unknown battery, not zero.");
+Check(state.DisplayStatus == new DeviceStatus("Headphones", true, null), "An online device with no reading keeps battery unknown in configuration.");
 Check(state.TryUpdateBattery(attempt, 0, DateTime.Now), "A genuine zero on a connected device remains valid.");
 Check(state.StatusText == "Disconnected" && !state.IsConnectedForDisplay, "Zero battery must use disconnected display rules.");
+Check(state.DisplayStatus == new DeviceStatus("Headphones", false, null), "Zero battery must publish offline with no percentage to configuration.");
 state.Disconnect();
 Check(state.BatteryLevel == null && state.LastUpdate == null && state.StatusText == "Disconnected", "Disconnect clears battery, timestamp and connection status.");
+Check(state.DisplayStatus == new DeviceStatus("Headphones", false, null), "A disconnect removes the configuration percentage.");
 Check(!state.TryUpdateBattery(attempt, 75, DateTime.Now), "A late read after disconnect must be rejected.");
 Check(!state.ConfirmConnection(attempt, true), "A stale open completing after a disconnect must be rejected.");
 var next = state.BeginConnection("new endpoint");
@@ -61,6 +65,7 @@ Check(!state.TryUpdateBattery(attempt, 0, DateTime.Now), "A previous connection'
 Check(state.BatteryLevel == null, "Reconnection must not inherit old battery readings.");
 Check(state.TryUpdateBattery(next, 88, DateTime.Now), "Accept current connection data.");
 Check(!state.TryUpdateBattery(next, 255, DateTime.Now) && state.BatteryLevel == 88, "Invalid battery data must not overwrite the valid reading.");
+Check(state.DisplayStatus == new DeviceStatus("Headphones", true, 88), "Current battery readings appear in the configuration snapshot.");
 // Startup: Windows' known battery should fill the connected mouse icon
 // without waiting for a live notification, while the other two stay hidden.
 Check(!new MonitorDeviceState("Offline").TrySeedBattery(0, 65), "A cached battery must never establish an offline device connection.");

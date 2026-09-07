@@ -548,6 +548,12 @@ namespace BluetoothBatteryMonitor
             ShowConfigurationDialog();
         }
 
+        internal event Action? DeviceStatusesChanged;
+
+        internal DeviceStatus[] GetDeviceStatuses() => _devices.Values
+            .OrderBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
+            .Select(device => device.DisplayStatus).ToArray();
+
         private void ShowConfigurationDialog()
         {
             if (_configurationDialogOpen)
@@ -556,7 +562,7 @@ namespace BluetoothBatteryMonitor
             _configurationDialogOpen = true;
             try
             {
-                using var dialog = new ConfigurationDialog();
+                using var dialog = new ConfigurationDialog(this);
                 if (dialog.ShowDialog() == DialogResult.OK)
                 {
                     ReloadConfiguration();
@@ -1190,6 +1196,7 @@ namespace BluetoothBatteryMonitor
             }
             catch (ObjectDisposedException) { }
             catch { }
+            finally { DeviceStatusesChanged?.Invoke(); }
         }
 
         private void UpdateContextMenuItems(string deviceName)

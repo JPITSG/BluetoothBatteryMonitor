@@ -18,6 +18,7 @@ internal class MonitorDeviceState
     // Keep the transport subscription alive so a later positive reading can
     // restore the icon, but treat zero exactly like disconnected in the UI.
     public bool IsConnectedForDisplay => IsConnected && BatteryLevel != 0;
+    public DeviceStatus DisplayStatus => new(Name, IsConnectedForDisplay, IsConnectedForDisplay ? BatteryLevel : null);
     public string StatusText => !IsConnectedForDisplay ? "Disconnected" :
         BatteryLevel.HasValue ? $"Battery: {BatteryLevel}%" : "Connected (battery unknown)";
 
@@ -61,6 +62,8 @@ internal class MonitorDeviceState
         return true;
     }
 }
+
+internal readonly record struct DeviceStatus(string Name, bool Online, int? BatteryLevel);
 
 internal readonly record struct TrayDevice(string Name, bool Connected, bool Visible);
 

@@ -22,6 +22,9 @@ namespace BluetoothBatteryMonitor
         private const int ScreenPadding = 64;
 
         private WebView2? _webView;
+        private readonly BatteryMonitor _monitor;
+        private DeviceStatus[]? _lastDeviceStatuses;
+        private static readonly JsonSerializerOptions MessageOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         private System.Drawing.Icon? _dialogIcon;
         private bool _initialized;
         private readonly CancellationTokenSource _lifetime = new();
@@ -35,8 +38,9 @@ namespace BluetoothBatteryMonitor
             return reader.ReadToEnd();
         });
 
-        public ConfigurationDialog()
+        internal ConfigurationDialog(BatteryMonitor monitor)
         {
+            _monitor = monitor;
             Text = "Configuration";
             ClientSize = new System.Drawing.Size(DialogClientWidth, InitialClientHeight);
             FormBorderStyle = FormBorderStyle.FixedDialog;
@@ -53,6 +57,7 @@ namespace BluetoothBatteryMonitor
             }
 
             AppUpdater.Instance.Changed += SendUpdateState;
+            _monitor.DeviceStatusesChanged += SendDeviceStatuses;
             InitializeWebView();
         }
 
@@ -108,6 +113,9 @@ namespace BluetoothBatteryMonitor
                 {
                     case "getInit":
                         HandleGetInit();
+                        break;
+                    case "getDeviceStatus":
+                        SendDeviceStatuses(force: true);
                         break;
 
                     case "dismissUpdate":
@@ -225,7 +233,7 @@ namespace BluetoothBatteryMonitor
             {
                 type = "init", devices = BuildDeviceList(configuredNames, _cachedPairedNames),
                 version = AppUpdater.DisplayVersion, autoCheck = AppUpdater.Instance.AutoCheck,
-                loadingDevices = true
+                loadingDevices = true, deviceStatuses = _monitor.GetDeviceStatuses()
             });
             SendUpdateState();
             _ = RefreshDevicesAsync(configuredNames);
@@ -266,7 +274,19 @@ namespace BluetoothBatteryMonitor
         private void SendMessage(object message)
         {
             if (IsDisposed || _lifetime.IsCancellationRequested || _webView?.CoreWebView2 == null) return;
-            _webView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message));
+            _webView.CoreWebView2.PostWebMessageAsJson(JsonSerializer.Serialize(message, MessageOptions));
+        }
+
+        private void SendDeviceStatuses() => SendDeviceStatuses(force: false);
+
+        private void SendDeviceStatuses(bool force)
+        {
+            if (!_initialized || IsDisposed || _lifetime.IsCancellationRequested) return;
+            var statuses = _monitor.GetDeviceStatuses();
+            // Repeated battery reports and tray redraws need no browser work.
+            if (!force && _lastDeviceStatuses != null && statuses.SequenceEqual(_lastDeviceStatuses)) return;
+            _lastDeviceStatuses = statuses;
+            SendMessage(new { type = "deviceStatus", deviceStatuses = statuses });
         }
 
         private void SendUpdateState()
@@ -311,6 +331,7 @@ namespace BluetoothBatteryMonitor
             if (disposing && !IsDisposed)
             {
                 _lifetime.Cancel();
+                _monitor.DeviceStatusesChanged -= SendDeviceStatuses;
                 AppUpdater.Instance.Changed -= SendUpdateState;
                 AppUpdater.Instance.Cancel();
                 if (_webView != null)

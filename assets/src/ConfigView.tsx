@@ -3,8 +3,9 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Label } from "./components/ui/label";
 import { saveDevices, postMessage, type InitData } from "./lib/bridge";
 import UpdateControls from "./UpdateControls";
+import DeviceStatusList from "./DeviceStatusList";
 
-export default function ConfigView({ devices, version, autoCheck, loadingDevices, deviceError }: InitData) {
+export default function ConfigView({ devices, version, autoCheck, loadingDevices, deviceError, deviceStatuses }: InitData) {
   const [automatic, setAutomatic] = useState(autoCheck);
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(devices.filter((device) => device.isConfigured).map((device) => device.name))
@@ -42,6 +43,8 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
           {loadingDevices && visibleDevices.length > 0 && <p role="status" className="text-neutral-500 text-[11px] leading-snug">Refreshing devices…</p>}
           {deviceError && <p role="status" className="text-neutral-500 text-[11px] leading-snug">{deviceError}</p>}
         </section>
+
+        <DeviceStatusList initialStatuses={deviceStatuses} />
 
         <div className="flex items-start gap-2 pt-1">
           <Checkbox id="autoCheckForUpdates" checked={automatic} className="mt-0.5" onChange={(event) => {
