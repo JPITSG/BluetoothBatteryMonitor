@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <Version>1.0.6</Version>
+    <Version>1.0.7</Version>
     <Product>BluetoothBatteryMonitor</Product>
     <OutputType>WinExe</OutputType>
     <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
@@ -31,7 +31,6 @@
     <EmbeddedResource Include="assets\icon_battery_good.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_good.ico" />
     <EmbeddedResource Include="assets\icon_battery_medium.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_medium.ico" />
     <EmbeddedResource Include="assets\icon_battery_low.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_low.ico" />
-    <EmbeddedResource Include="assets\icon_battery_unknown.ico" LogicalName="BluetoothBatteryMonitor.icon_battery_unknown.ico" />
     <EmbeddedResource Include="assets\dist\index.html" LogicalName="BluetoothBatteryMonitor.config_ui.html" />
   </ItemGroup>
 

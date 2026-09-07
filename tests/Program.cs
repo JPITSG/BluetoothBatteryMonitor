@@ -50,7 +50,7 @@ Check(state.StatusText == "Disconnected", "Cached battery data must not change d
 Check(state.ConfirmConnection(attempt, true), "A confirmed transport connection should be accepted.");
 Check(state.StatusText == "Connected (battery unknown)", "A new connection has unknown battery, not zero.");
 Check(state.TryUpdateBattery(attempt, 0, DateTime.Now), "A genuine zero on a connected device remains valid.");
-Check(state.StatusText == "Battery: 0%", "Do not hide a genuine empty battery.");
+Check(state.StatusText == "Disconnected" && !state.IsConnectedForDisplay, "Zero battery must use disconnected display rules.");
 state.Disconnect();
 Check(state.BatteryLevel == null && state.LastUpdate == null && state.StatusText == "Disconnected", "Disconnect clears battery, timestamp and connection status.");
 Check(!state.TryUpdateBattery(attempt, 75, DateTime.Now), "A late read after disconnect must be rejected.");
@@ -109,4 +109,62 @@ Check(systemVisible.SetEquals(new[] { systemMouse.Name }), "The Windows-connecte
 if (!ConnectionEvidence.IsConnected(true, false, true)) systemMouse.Disconnect();
 Check(systemMouse.StatusText == "Disconnected" && systemMouse.BatteryLevel == null, "A subsequent Windows disconnect clears the seeded battery.");
 Check(!systemMouse.TrySeedBattery(systemSession, 70), "A cache result cannot override a Windows disconnect.");
-Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, and battery status.");
+// Zero-percent readings behave as disconnected for status and visibility,
+// while retaining the subscription so a later positive value can recover.
+var empty = new MonitorDeviceState("Empty");
+var emptySession = empty.BeginConnection("empty endpoint");
+empty.ConfirmConnection(emptySession, true);
+Check(empty.TryUpdateBattery(emptySession, 0, liveTime), "Accept zero so its disconnected display policy can be applied.");
+Check(empty.IsConnected && !empty.IsConnectedForDisplay && empty.StatusText == "Disconnected", "Keep monitoring while displaying zero as disconnected.");
+var singleEmpty = TrayVisibility.SelectVisible(new[] { new TrayDevice(empty.Name, empty.IsConnectedForDisplay, true) });
+Check(singleEmpty.SetEquals(new[] { empty.Name }), "A single zero-battery device must retain configuration access.");
+var withCharged = TrayVisibility.SelectVisible(new[] {
+    new TrayDevice(empty.Name, empty.IsConnectedForDisplay, true), new TrayDevice("Charged", true, false)
+});
+Check(withCharged.SetEquals(new[] { "Charged" }), "Hide a zero-battery device while another device is available.");
+var allEmpty = TrayVisibility.SelectVisible(new[] {
+    new TrayDevice(empty.Name, empty.IsConnectedForDisplay, true), new TrayDevice("Offline", false, false)
+});
+Check(allEmpty.SetEquals(new[] { empty.Name }), "Do not hide the final icon when every device is zero or disconnected.");
+Check(empty.TryUpdateBattery(emptySession, 20, liveTime.AddSeconds(1)) && empty.IsConnectedForDisplay,
+    "A later positive battery notification must restore normal visibility without a physical reconnect.");
+
+// Identities do not depend on process-local icon IDs, discovery order, casing,
+// executable version or which other devices are currently connected.
+var mouseId = TrayIconIdentity.ForDevice("Logitech MX Master 3");
+Check(mouseId == TrayIconIdentity.ForDevice("LOGITECH MX MASTER 3"), "Case changes must not reset tray preferences.");
+Check(mouseId != TrayIconIdentity.ForDevice("Headphones"), "Different devices need distinct shell identities.");
+Check(TrayIconIdentity.Configuration != TrayIconIdentity.ForDevice("configuration"), "The fallback icon has its own identity namespace.");
+Check(mouseId == new Guid("bc5a00ac-d9c6-7eef-d815-04decc5df3b0"), "The published tray identity must remain stable across releases.");
+Check(System.Runtime.InteropServices.Marshal.SizeOf<TrayIconData>() == (IntPtr.Size == 8 ? 976 : 956), "NOTIFYICONDATAW must use the Windows ABI layout.");
+
+var calls = new List<(TrayCommand Command, TrayIconData Data)>();
+var registration = new TrayIconRegistration(mouseId, (command, data) => { calls.Add((command, data)); return true; });
+var window = new IntPtr(10);
+var iconHandle = new IntPtr(20);
+Check(registration.Update(window, iconHandle, "Mouse", false) && calls.Count == 0, "An initially disconnected icon must not be added to Explorer.");
+Check(registration.Update(window, iconHandle, "Mouse", true), "Initial registration should succeed.");
+Check(calls.Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }), "Add and set callback version on first display.");
+Check(registration.Version4 && calls[1].Data.Version == 4, "Use modern keyboard and tooltip callbacks.");
+registration.Update(window, iconHandle, "Disconnected", false);
+Check(calls[^1].Command == TrayCommand.Modify && calls[^1].Data.State == 1 && calls[^1].Data.StateMask == 1,
+    "Disconnect hides the existing shell registration rather than deleting it.");
+registration.Update(window, iconHandle, "Battery: 60%", true);
+Check(calls[^1].Command == TrayCommand.Modify && calls[^1].Data.State == 0, "Reconnect unhides the same registration.");
+Check(calls.Count(c => c.Command == TrayCommand.Add) == 1 && calls.All(c => c.Command != TrayCommand.Delete), "Routine connection changes must not recreate the icon.");
+registration.ExplorerRestarted();
+registration.Update(new IntPtr(30), iconHandle, "Battery: 60%", true);
+Check(calls[^2].Command == TrayCommand.Add && calls[^1].Command == TrayCommand.SetVersion, "Restore the icon after Explorer restarts.");
+registration.ReturnFocus(new IntPtr(30));
+registration.Remove(new IntPtr(30));
+Check(calls[^1].Command == TrayCommand.Delete, "Application shutdown removes the shell icon.");
+Check(calls.All(c => c.Data.Identity == mouseId && c.Data.Flags.HasFlag(TrayFlags.Guid)), "Every shell operation must address the same stable GUID, even after a window changes.");
+
+var available = false;
+var retryCalls = new List<TrayCommand>();
+var retryRegistration = new TrayIconRegistration(mouseId, (command, data) => { retryCalls.Add(command); return available; });
+Check(!retryRegistration.Update(window, iconHandle, "Mouse", true), "Shell registration failure must request a retry.");
+available = true;
+Check(retryRegistration.Update(window, iconHandle, "Mouse", true), "Retry when Explorer becomes available.");
+Check(retryCalls.SequenceEqual(new[] { TrayCommand.Add, TrayCommand.Add, TrayCommand.SetVersion }), "A failed add must not be mistaken for a registered icon.");
+Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, battery status, and persistent tray registration.");

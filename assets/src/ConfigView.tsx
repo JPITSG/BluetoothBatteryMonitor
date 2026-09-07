@@ -84,7 +84,7 @@ export default function ConfigView({ devices, version, autoCheck }: ConfigViewPr
         </span>
       </label>
 
-      <div className="flex items-center justify-between gap-3 border-t border-neutral-200 pt-3">
+      <div className="flex items-center justify-between gap-3 pt-3">
         <span className="select-none whitespace-nowrap text-[11px] leading-none tabular-nums text-neutral-400" title="Application version">v{version}</span>
         <div className="flex items-center gap-2 min-w-0">
           <Button ref={updateButtonRef} variant={update.busy ? "destructive" : "outline"} size="sm" className="min-w-[5rem] max-w-[10rem]" disabled={stopping}

@@ -15,7 +15,10 @@ internal class MonitorDeviceState
     public bool IsConnected { get; private set; }
     public int? BatteryLevel { get; private set; }
     public DateTime? LastUpdate { get; private set; }
-    public string StatusText => !IsConnected ? "Disconnected" :
+    // Keep the transport subscription alive so a later positive reading can
+    // restore the icon, but treat zero exactly like disconnected in the UI.
+    public bool IsConnectedForDisplay => IsConnected && BatteryLevel != 0;
+    public string StatusText => !IsConnectedForDisplay ? "Disconnected" :
         BatteryLevel.HasValue ? $"Battery: {BatteryLevel}%" : "Connected (battery unknown)";
 
     public long BeginConnection(string deviceId)

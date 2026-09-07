@@ -7,5 +7,7 @@
   </PropertyGroup>
   <ItemGroup>
     <Compile Include="../MonitorDeviceState.cs" Link="MonitorDeviceState.cs" />
+    <Compile Include="../TrayIconIdentity.cs" Link="TrayIconIdentity.cs" />
+    <Compile Include="../TrayIconRegistration.cs" Link="TrayIconRegistration.cs" />
   </ItemGroup>
 </Project>

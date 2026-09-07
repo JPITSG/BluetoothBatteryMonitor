@@ -4,11 +4,13 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 
 ## Features
 
-- Per-device system tray icons with battery level indicators (full, good, medium, low, empty, unknown)
+- Per-device system tray icons with battery level indicators (full, good, medium, low, empty)
 - One monitored device always keeps its tray icon. With multiple devices, only connected devices appear; when all disconnect, the last visible icon remains with a **Disconnected** status. With none configured, a configuration icon stays available.
 - Supports Bluetooth LE (GATT Battery Service), Bluetooth Classic (HFP via CfgMgr32), and Windows device property fallback
 - WebView2 configuration dialog for selecting which paired devices to monitor
 - Device configuration persisted in Windows Registry (`HKCU\SOFTWARE\JPIT\BluetoothBatteryMonitor`)
+- Zero-percent readings follow disconnected status and tray visibility rules. Disconnected and unknown batteries use the plain empty-battery icon.
+- Each device has a stable tray GUID so Explorer can retain its preferences across app restarts, updates, and connection changes. After upgrading from older icons, arrange the icons once; subsequent launches reuse those identities. Keep the executable at the same path.
 - Startup uses Windows battery properties and cached Bluetooth battery data for devices confirmed connected, then refreshes from the device
 - Automatic device connect/disconnect detection via DeviceWatcher with periodic state verification
 - DPI-aware with icon refresh on display/session changes (including RDP reconnect)
@@ -52,7 +54,7 @@ Output: `release/BluetoothBatteryMonitor.exe`
 
 ## Updates
 
-Version: **1.0.6**.
+Version: **1.0.7**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

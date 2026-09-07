@@ -19,8 +19,8 @@ namespace BluetoothBatteryMonitor
     {
         #region Private Fields
         private readonly Dictionary<string, DeviceInfo> _devices;
-        private readonly Dictionary<string, NotifyIcon> _trayIcons;
-        private NotifyIcon? _accessIcon;
+        private readonly Dictionary<string, PersistentTrayIcon> _trayIcons;
+        private PersistentTrayIcon? _accessIcon;
         private readonly Dictionary<string, Icon> _deviceCurrentIcons;
         private readonly Dictionary<string, ToolStripItem> _deviceMenuItems;
         private readonly Dictionary<string, ToolStripItem> _deviceLastUpdateMenuItems;
@@ -52,7 +52,6 @@ namespace BluetoothBatteryMonitor
         private Icon? _iconMedium;
         private Icon? _iconLow;
         private Icon? _iconEmpty;
-        private Icon? _iconUnknown;
 
         private const string RegistryKeyPath = @"SOFTWARE\JPIT\BluetoothBatteryMonitor";
         private const string RegistryDevicesValue = "Devices";
@@ -152,7 +151,7 @@ namespace BluetoothBatteryMonitor
             _disposeCts = new CancellationTokenSource();
 
             _devices = new Dictionary<string, DeviceInfo>(StringComparer.OrdinalIgnoreCase);
-            _trayIcons = new Dictionary<string, NotifyIcon>();
+            _trayIcons = new Dictionary<string, PersistentTrayIcon>();
             _deviceCurrentIcons = new Dictionary<string, Icon>();
             _deviceMenuItems = new Dictionary<string, ToolStripItem>();
             _deviceLastUpdateMenuItems = new Dictionary<string, ToolStripItem>();
@@ -275,7 +274,6 @@ namespace BluetoothBatteryMonitor
             var oldIconMedium = _iconMedium;
             var oldIconLow = _iconLow;
             var oldIconEmpty = _iconEmpty;
-            var oldIconUnknown = _iconUnknown;
 
             LoadBatteryIcons();
 
@@ -304,8 +302,6 @@ namespace BluetoothBatteryMonitor
                 oldIconMedium?.Dispose();
                 oldIconLow?.Dispose();
                 oldIconEmpty?.Dispose();
-                if (!ReferenceEquals(oldIconUnknown, oldIconEmpty))
-                    oldIconUnknown?.Dispose();
             }
             catch { }
         }
@@ -325,7 +321,7 @@ namespace BluetoothBatteryMonitor
 
             var lastUpdatedItem = contextMenu.Items.Add(FormatLastUpdateText(deviceInfo), null, null);
             lastUpdatedItem.Enabled = false;
-            lastUpdatedItem.Available = deviceInfo.LastUpdate.HasValue;
+            lastUpdatedItem.Available = deviceInfo.IsConnectedForDisplay && deviceInfo.LastUpdate.HasValue;
             _deviceLastUpdateMenuItems[deviceName] = lastUpdatedItem;
 
             contextMenu.Opening += (_, _) => UpdateContextMenuItems(deviceName);
@@ -404,12 +400,10 @@ namespace BluetoothBatteryMonitor
                 _iconMedium = LoadIconFromResource(assembly, "icon_battery_medium.ico") ?? CreateFallbackIcon();
                 _iconLow = LoadIconFromResource(assembly, "icon_battery_low.ico") ?? CreateFallbackIcon();
                 _iconEmpty = LoadIconFromResource(assembly, "icon_battery_empty.ico") ?? CreateFallbackIcon();
-                _iconUnknown = LoadIconFromResource(assembly, "icon_battery_unknown.ico") ?? _iconEmpty;
             }
             catch
             {
                 _iconEmpty = CreateFallbackIcon();
-                _iconUnknown = _iconEmpty;
             }
         }
 
@@ -440,7 +434,7 @@ namespace BluetoothBatteryMonitor
         {
             return percentage switch
             {
-                null => _iconUnknown ?? _iconEmpty ?? CreateFallbackIcon(),
+                null => _iconEmpty ?? CreateFallbackIcon(),
                 >= 75 => _iconFull ?? CreateFallbackIcon(),
                 >= 50 => _iconGood ?? CreateFallbackIcon(),
                 >= 25 => _iconMedium ?? CreateFallbackIcon(),
@@ -450,9 +444,9 @@ namespace BluetoothBatteryMonitor
         }
 
         // Visibility is reconciled across all devices after updating their state.
-        private void ApplyDeviceIconState(string deviceName, DeviceInfo deviceInfo, NotifyIcon icon)
+        private void ApplyDeviceIconState(string deviceName, DeviceInfo deviceInfo, PersistentTrayIcon icon)
         {
-            var batteryIcon = GetBatteryIcon(deviceInfo.IsConnected ? deviceInfo.BatteryLevel : null);
+            var batteryIcon = GetBatteryIcon(deviceInfo.IsConnectedForDisplay ? deviceInfo.BatteryLevel : null);
             _deviceCurrentIcons[deviceName] = batteryIcon;
 
             if (icon.Icon != batteryIcon)
@@ -495,7 +489,7 @@ namespace BluetoothBatteryMonitor
             {
                 var deviceInfo = _devices[deviceName];
                 
-                var notifyIcon = new NotifyIcon
+                var notifyIcon = new PersistentTrayIcon(TrayIconIdentity.ForDevice(deviceName))
                 {
                     Icon = GetBatteryIcon(deviceInfo.BatteryLevel),
                     Visible = false,
@@ -514,7 +508,7 @@ namespace BluetoothBatteryMonitor
         private void RefreshTrayVisibility()
         {
             var devices = _devices.Values.Select(d => new TrayDevice(
-                d.Name, d.IsConnected, _trayIcons.TryGetValue(d.Name, out var icon) && icon.Visible)).ToArray();
+                d.Name, d.IsConnectedForDisplay, _trayIcons.TryGetValue(d.Name, out var icon) && icon.Visible)).ToArray();
             var visible = TrayVisibility.SelectVisible(devices);
             if (_accessIcon == null)
             {
@@ -522,7 +516,7 @@ namespace BluetoothBatteryMonitor
                 menu.Items.Add("Configuration", null, OnConfigureClick);
                 menu.Items.Add("-");
                 menu.Items.Add("Exit", null, OnExitClick);
-                _accessIcon = new NotifyIcon { Text = "Bluetooth Battery Monitor\nNo devices configured", ContextMenuStrip = menu };
+                _accessIcon = new PersistentTrayIcon(TrayIconIdentity.Configuration) { Text = "Bluetooth Battery Monitor\nNo devices configured", ContextMenuStrip = menu };
                 _accessIcon.DoubleClick += OnConfigureClick;
             }
             _accessIcon.Icon = GetBatteryIcon(null);
@@ -1216,7 +1210,7 @@ namespace BluetoothBatteryMonitor
                     !lastUpdateItem.IsDisposed &&
                     (lastUpdateItem.Owner == null || !lastUpdateItem.Owner.IsDisposed))
                 {
-                    lastUpdateItem.Available = deviceInfo.LastUpdate.HasValue;
+                    lastUpdateItem.Available = deviceInfo.IsConnectedForDisplay && deviceInfo.LastUpdate.HasValue;
                     lastUpdateItem.Text = FormatLastUpdateText(deviceInfo);
                 }
             }
@@ -1264,7 +1258,7 @@ namespace BluetoothBatteryMonitor
         private static string BuildNotifyIconText(string deviceName, DeviceInfo deviceInfo)
         {
             string statusText = GetStatusText(deviceInfo);
-            string tooltipText = deviceInfo.LastUpdate.HasValue
+            string tooltipText = deviceInfo.IsConnectedForDisplay && deviceInfo.LastUpdate.HasValue
                 ? $"{deviceName}\n{statusText}\n{FormatLastUpdateShortText(deviceInfo)}"
                 : $"{deviceName}\n{statusText}";
             return TruncateNotifyIconText(tooltipText);
@@ -1531,8 +1525,6 @@ namespace BluetoothBatteryMonitor
                 _iconMedium?.Dispose();
                 _iconLow?.Dispose();
                 _iconEmpty?.Dispose();
-                if (!ReferenceEquals(_iconUnknown, _iconEmpty))
-                    _iconUnknown?.Dispose();
 
                 _deviceLock.Dispose();
                 _disposeCts.Dispose();
