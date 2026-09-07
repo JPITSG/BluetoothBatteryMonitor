@@ -308,7 +308,7 @@ namespace BluetoothBatteryMonitor
 
         private ContextMenuStrip CreateContextMenuForDevice(string deviceName, DeviceInfo deviceInfo)
         {
-            var contextMenu = new ContextMenuStrip { AutoSize = true };
+            var contextMenu = new TrayContextMenuStrip { AutoSize = true };
             
             var deviceMenuItem = contextMenu.Items.Add(deviceName, null, null);
             deviceMenuItem.Enabled = false;
@@ -512,7 +512,7 @@ namespace BluetoothBatteryMonitor
             var visible = TrayVisibility.SelectVisible(devices);
             if (_accessIcon == null)
             {
-                var menu = new ContextMenuStrip();
+                var menu = new TrayContextMenuStrip();
                 menu.Items.Add("Configuration", null, OnConfigureClick);
                 menu.Items.Add("-");
                 menu.Items.Add("Exit", null, OnExitClick);
