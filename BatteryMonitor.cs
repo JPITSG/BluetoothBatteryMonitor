@@ -31,6 +31,7 @@ namespace BluetoothBatteryMonitor
         private readonly SemaphoreSlim _deviceLock;
         private readonly SynchronizationContext _syncContext;
         private readonly CancellationTokenSource _disposeCts;
+        private readonly BatteryHistoryStore _batteryHistory;
         private DeviceWatcher? _deviceWatcher;
         private DeviceWatcher? _classicDeviceWatcher;
         private readonly TimeSpan _stateVerificationInterval = TimeSpan.FromSeconds(60);
@@ -149,6 +150,10 @@ namespace BluetoothBatteryMonitor
         {
             _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             _disposeCts = new CancellationTokenSource();
+            _batteryHistory = new BatteryHistoryStore(System.IO.Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "BluetoothBatteryMonitor", "battery-history"), LogMonitorError);
+            _batteryHistory.LastChargeChanged += OnBatteryHistoryChanged;
 
             _devices = new Dictionary<string, DeviceInfo>(StringComparer.OrdinalIgnoreCase);
             _trayIcons = new Dictionary<string, PersistentTrayIcon>();
@@ -460,6 +465,7 @@ namespace BluetoothBatteryMonitor
             foreach (var name in LoadDeviceNamesFromRegistry())
             {
                 _devices[name] = new DeviceInfo(name);
+                _batteryHistory.Load(name);
             }
         }
 
@@ -552,7 +558,16 @@ namespace BluetoothBatteryMonitor
 
         internal DeviceStatus[] GetDeviceStatuses() => _devices.Values
             .OrderBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(device => device.DisplayStatus).ToArray();
+            .Select(device => device.DisplayStatus with { LastChargedAt = _batteryHistory.GetLastChargedAt(device.Name) }).ToArray();
+
+        private void OnBatteryHistoryChanged()
+        {
+            if (_disposeCts.IsCancellationRequested) return;
+            _syncContext.Post(_ =>
+            {
+                if (!_disposeCts.IsCancellationRequested) DeviceStatusesChanged?.Invoke();
+            }, null);
+        }
 
         private void ShowConfigurationDialog()
         {
@@ -1178,7 +1193,13 @@ namespace BluetoothBatteryMonitor
             bool updated = cached
                 ? entry.TrySeedBattery(generation, batteryLevel)
                 : entry.TryUpdateBattery(generation, batteryLevel, DateTime.Now);
-            if (updated) UpdateDeviceIcon(entry.Name);
+            if (updated)
+            {
+                // This path accepts readings only for currently monitored,
+                // connected devices and the current connection generation.
+                _batteryHistory.Record(entry.Name, batteryLevel, DateTimeOffset.UtcNow);
+                UpdateDeviceIcon(entry.Name);
+            }
         }
 
         private void UpdateDeviceIcon(string deviceName)
@@ -1539,6 +1560,11 @@ namespace BluetoothBatteryMonitor
                 base.Dispose();
             }
             catch { }
+            finally
+            {
+                _batteryHistory.LastChargeChanged -= OnBatteryHistoryChanged;
+                _batteryHistory.Dispose();
+            }
         }
         #endregion
 

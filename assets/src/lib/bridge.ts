@@ -7,6 +7,7 @@ export interface DeviceStatus {
   name: string;
   online: boolean;
   batteryLevel: number | null;
+  lastChargedAt?: string | null;
 }
 
 export interface DeviceState {

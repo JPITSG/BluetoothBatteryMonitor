@@ -3,6 +3,7 @@ import { Checkbox } from "./components/ui/checkbox";
 import { Label } from "./components/ui/label";
 import { saveDevices, onHostMessage, postMessage, type InitData } from "./lib/bridge";
 import UpdateControls from "./UpdateControls";
+import LastCharged from "./LastCharged";
 
 export default function ConfigView({ devices, version, autoCheck, loadingDevices, deviceError, deviceStatuses }: InitData) {
   const [automatic, setAutomatic] = useState(autoCheck);
@@ -55,7 +56,7 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
                     <span className={status.online ? "text-green-700" : "text-red-600"}>
                       {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
-                  )}</span>
+                  )}<LastCharged timestamp={status?.lastChargedAt} /></span>
                 </label>
               );
             })}

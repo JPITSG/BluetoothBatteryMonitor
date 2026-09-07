@@ -26,6 +26,43 @@ On first launch, a sentinel battery icon appears in the tray. Right-click it and
 - **Double-click** any device icon to open Windows Bluetooth settings
 - **`--listdevices`** flag: shows all paired Bluetooth devices in a dialog and exits
 
+## Battery history
+
+Battery readings for enabled, monitored devices are saved locally in
+`%LOCALAPPDATA%\BluetoothBatteryMonitor\battery-history\` (usually
+`C:\Users\<you>\AppData\Local\BluetoothBatteryMonitor\battery-history\`).
+Each device has a JSON file, named with a stable hash of its case-insensitive
+configured name; its readable device name is included inside the file.
+
+The first known percentage is saved, then only percentage changes trigger a
+save. Each file retains the newest **1,000 entries**, containing the observed
+percentage and a UTC observation timestamp. Windows' cached readings are logged
+when observed; Windows does not provide their original measurement time.
+Disconnected/unknown values do not create synthetic readings. Actual reported
+zeroes are logged, but follow the app's disconnected display policy.
+
+A rise of **at least five percentage points compared with the previous nonzero
+reading** marks a charge. Smaller individual increases do not trigger it. Zeroes
+are excluded from the comparison so a disconnected sentinel cannot fabricate a
+charge. The first usable reading establishes the baseline. **Last charged**
+appears below the device's connection status in configuration, in local time,
+and remains visible while disconnected. This is the time the increase was
+observed, not the exact time charging began or ended. No line appears until a
+charge is detected. The last-charge timestamp survives restarts and log trimming.
+
+File operations run in the background; changed logs are replaced atomically and
+pending saves finish on normal exit or update. Duplicate readings, including
+after restarting, do not rewrite the log. Turning monitoring off stops new
+logging after saving the selection; existing history is retained for re-enabling.
+Unreadable/write-failed logs are retried on later readings and errors go to
+`diagnostics.log`; invalid JSON is preserved in a `.corrupt-*` backup before
+starting a fresh log. History stays on this PC and is not uploaded.
+
+For a dummy-data configuration preview, build the frontend and open
+`http://127.0.0.1:8782/tests/config-preview.html` using the local server described
+below. It uses the real built modal and simulated devices, without changing
+settings or writing any history.
+
 ## Prerequisites
 
 ### Building (Debian/Linux):
@@ -43,7 +80,7 @@ On first launch, a sentinel battery icon appears in the tray. Right-click it and
 ```bash
 make          # full build: frontend + .NET publish
 make clean    # remove all build artifacts
-make test     # connection, tray, and update-download regression checks
+make test     # connection, tray, update-download, and battery-history regression checks
 ```
 
 Output: `release/BluetoothBatteryMonitor.exe`
@@ -61,7 +98,7 @@ handoff still require Windows verification.
 
 ## Updates
 
-Version: **1.0.14**.
+Version: **1.0.15**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

@@ -63,7 +63,7 @@ internal class MonitorDeviceState
     }
 }
 
-internal readonly record struct DeviceStatus(string Name, bool Online, int? BatteryLevel);
+internal readonly record struct DeviceStatus(string Name, bool Online, int? BatteryLevel, DateTimeOffset? LastChargedAt = null);
 
 internal readonly record struct TrayDevice(string Name, bool Connected, bool Visible);
 

@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bluetooth Battery Monitor · Configuration preview</title>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; padding: 40px 16px; display: grid; place-content: center;
+    background: #f4f4f5; color: #262626; font: 12px "Segoe UI", system-ui, sans-serif; }
+  main { width: 422px; max-width: calc(100vw - 32px); }
+  .note { color: #737373; font-size: 11px; margin: 0 0 10px; text-align: center; }
+  .window { border: 1px solid #d4d4d4; border-radius: 8px; overflow: hidden; background: white;
+    box-shadow: 0 12px 40px #00000012; }
+  header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; font-size: 12px; }
+  header img { width: 16px; height: 16px; }
+  iframe { display: block; width: 100%; height: 310px; max-height: calc(100vh - 180px); border: 0; }
+  #feedback { min-height: 16px; margin: 10px 0 0; }
+</style>
+<main>
+  <p class="note">Configuration preview · Sample device and charge data</p>
+  <div class="window">
+    <header><img src="../assets/icon.ico" alt="">Bluetooth Battery Monitor</header>
+    <iframe title="Configuration modal with sample battery history"></iframe>
+  </div>
+  <p id="feedback" class="note" role="status"></p>
+</main>
+<script type="module">
+const frame = document.querySelector('iframe');
+const feedback = document.querySelector('#feedback');
+function mockHost(version) {
+  const listeners = new Set();
+  const chargeAt = (daysAgo, hour, minute) => {
+    const date = new Date();
+    date.setDate(date.getDate() - daysAgo);
+    date.setHours(hour, minute, 0, 0);
+    return date.toISOString();
+  };
+  const devices = [
+    { name: 'MX Master 3S', isConfigured: true },
+    { name: 'MX Keys', isConfigured: true },
+    { name: 'WH-1000XM5', isConfigured: true },
+    { name: 'Bluetooth speaker', isConfigured: false },
+  ];
+  const deviceStatuses = [
+    { name: 'MX Master 3S', online: true, batteryLevel: 67, lastChargedAt: chargeAt(2, 10, 42) },
+    { name: 'MX Keys', online: true, batteryLevel: 88, lastChargedAt: null },
+    { name: 'WH-1000XM5', online: false, batteryLevel: null, lastChargedAt: chargeAt(5, 18, 15) },
+  ];
+  const send = data => listeners.forEach(listener => listener({ data }));
+  const update = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: version };
+  const tell = previewMessage => parent.postMessage({ previewMessage }, '*');
+  window.chrome ??= {};
+  window.chrome.webview = {
+    addEventListener: (_, listener) => listeners.add(listener),
+    removeEventListener: (_, listener) => listeners.delete(listener),
+    postMessage: raw => {
+      const message = JSON.parse(raw);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses,
+        version, autoCheck: true, loadingDevices: false }), 0);
+      if (message.action === 'getDeviceStatus') setTimeout(() => send({ type: 'deviceStatus', deviceStatuses }), 0);
+      if (message.action === 'getUpdateState') setTimeout(() => send(update), 0);
+      if (message.action === 'resize') parent.postMessage({ previewHeight: message.height }, '*');
+      if (message.action === 'saveDevices' || message.action === 'close') tell('Preview only — no settings changed. The modal stays open for tweaks.');
+      if (message.action === 'checkUpdate') {
+        setTimeout(() => send({ ...update, status: 'You are up to date.' }), 250);
+        tell('Preview only — no update was downloaded.');
+      }
+    },
+  };
+}
+window.addEventListener('message', event => {
+  if (event.source !== frame.contentWindow) return;
+  if (event.data.previewHeight) frame.style.height = `${event.data.previewHeight}px`;
+  if (event.data.previewMessage) feedback.textContent = event.data.previewMessage;
+});
+try {
+  const [html, manifest] = await Promise.all([
+    fetch('../assets/dist/index.html').then(response => { if (!response.ok) throw new Error('Build the frontend first.'); return response.text(); }),
+    fetch('../assets/package.json').then(response => response.json()),
+  ]);
+  frame.srcdoc = html.replace('<head>', `<head><script>(${mockHost.toString()})(${JSON.stringify(manifest.version)});<\/script>`);
+} catch (error) { feedback.textContent = String(error); }
+</script>
+</html>

@@ -33,7 +33,7 @@ const wait = async (predicate) => {
 };
 function mockHost() {
   const listeners = new Set();
-  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.14' };
+  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.15' };
   const devices = [
     { name: 'Headphones', isConfigured: true },
     { name: 'Keyboard', isConfigured: false },
@@ -53,7 +53,7 @@ function mockHost() {
     postMessage: raw => {
       const message = JSON.parse(raw);
       messages.push(message);
-      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.14', autoCheck: false, loadingDevices: true }), 0);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.15', autoCheck: false, loadingDevices: true }), 0);
       if (message.action === 'getDeviceStatus') setTimeout(() => send({ type: 'deviceStatus', deviceStatuses }), 0);
       if (message.action === 'getUpdateState') setTimeout(() => send(state), 0);
       if (message.action === 'resize') parent.postMessage({ testHeight: message.height }, '*');
@@ -90,6 +90,22 @@ try {
   check(!doc.querySelector('dl') && row('Mouse').textContent === 'Mouse · Connected · 67%', 'Device status appears inline inside the checkbox card, without a duplicate device list.');
   check(statusOf('Mouse') === 'Connected · 67%' && statusOf('Headphones') === 'Disconnected', 'Initial monitored-device status shows percentages only when connected.');
   check(frame.contentWindow.getComputedStyle(row('Headphones').querySelector('span span')).color === 'rgb(220, 38, 38)', 'Disconnected status is red.');
+  check(!doc.querySelector('time'), 'No last-charge line is invented before a charge has been detected.');
+  const mouseCharge = new Date().toISOString();
+  const headphoneCharge = '2025-12-20T08:30:00Z';
+  host.send({ type: 'deviceStatus', deviceStatuses: host.deviceStatuses.map(status => ({ ...status,
+    lastChargedAt: status.name === 'Mouse' ? mouseCharge : headphoneCharge })) });
+  await wait(() => row('Mouse').querySelector('time'));
+  check(row('Mouse').querySelector('time').dateTime === mouseCharge && statusOf('Mouse') === 'Connected · 67%', 'A detected charge appears beneath the existing device status without duplicating its name or battery.');
+  check(row('Headphones').querySelector('time').dateTime === headphoneCharge && statusOf('Headphones') === 'Disconnected', 'Last charge stays visible when a monitored device is disconnected.');
+  check(row('Headphones').querySelector('time').textContent.includes('2025'), 'Older charge dates include the year.');
+  check(row('Mouse').querySelector('time').parentElement.title.includes('5 percentage points') && checkbox('Mouse').checked, 'The charge tooltip explains detection and live updates preserve selection.');
+  const localDate = new Date(mouseCharge);
+  const localText = new frame.contentWindow.Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(localDate);
+  check(row('Mouse').querySelector('time').textContent === localText, 'Charge timestamps are formatted in the user’s local time.');
+  host.send({ type: 'deviceStatus', deviceStatuses: host.deviceStatuses.map(status => ({ ...status, lastChargedAt: 'invalid' })) });
+  await wait(() => !doc.querySelector('time'));
+  check(!doc.body.textContent.includes('Invalid Date'), 'Malformed charge timestamps are hidden safely.');
   host.send({ type: 'deviceStatus', deviceStatuses: [{ name: 'Headphones', online: true, batteryLevel: null }, { name: 'Mouse', online: false, batteryLevel: null }] });
   await wait(() => statusOf('Mouse') === 'Disconnected');
   check(statusOf('Headphones') === 'Connected · Battery unknown', 'An unknown battery is never fabricated as 0%.');
@@ -136,7 +152,7 @@ try {
   button('Save').click();
   const saved = host.messages.findLast(message => message.action === 'saveDevices').devices;
   check(saved.includes('Keyboard') && saved.includes('Headphones') && !saved.includes('Mouse'), 'Save sends the edited selection after discovery.');
-  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.14' });
+  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.15' });
   await wait(() => doc.querySelector('dialog').open);
   button('Force update').click();
   await wait(() => button('Starting...'));

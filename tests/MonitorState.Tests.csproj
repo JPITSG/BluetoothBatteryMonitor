@@ -6,6 +6,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../BatteryHistoryStore.cs" Link="BatteryHistoryStore.cs" />
     <Compile Include="../MonitorDeviceState.cs" Link="MonitorDeviceState.cs" />
     <Compile Include="../TrayIconIdentity.cs" Link="TrayIconIdentity.cs" />
     <Compile Include="../TrayIconRegistration.cs" Link="TrayIconRegistration.cs" />
