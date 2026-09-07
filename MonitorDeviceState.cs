@@ -25,9 +25,9 @@ internal class MonitorDeviceState
         return Generation;
     }
 
-    public bool ConfirmConnection(long generation, bool transportConnected)
+    public bool ConfirmConnection(long generation, bool connectionConfirmed)
     {
-        if (generation != Generation || !transportConnected) return false;
+        if (generation != Generation || !connectionConfirmed) return false;
         IsConnected = true;
         return true;
     }
@@ -74,4 +74,17 @@ internal static class TrayVisibility
         }
         return visible;
     }
+}
+
+// Windows' paired endpoint state describes the system connection. A WinRT
+// Bluetooth object can lag behind it; it is only a fallback when unavailable.
+internal static class ConnectionEvidence
+{
+    public static bool IsConnected(bool paired, bool? windowsConnected, bool nativeConnected) =>
+        windowsConnected switch
+        {
+            false => false,
+            true when paired => true,
+            _ => nativeConnected
+        };
 }

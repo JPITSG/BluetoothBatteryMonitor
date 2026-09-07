@@ -52,7 +52,7 @@ Output: `release/BluetoothBatteryMonitor.exe`
 
 ## Updates
 
-Version: **1.0.5**.
+Version: **1.0.6**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
@@ -68,3 +68,13 @@ Older versions are never installed. A helper waits for the running app to exit,
 keeps a backup during replacement, and restores it if launching the new executable
 fails. Protected installation folders request Windows elevation. After a successful
 update, configuration displays the installed version.
+
+## Connection troubleshooting
+
+Connection state follows Windows' explicit connection flag for each paired
+Bluetooth endpoint. The Bluetooth object's status is a fallback when Windows
+does not provide that flag. Battery values never establish a connection.
+
+Device enumeration retries with connection-only properties when battery-property
+queries fail. Errors are recorded locally in
+`%LOCALAPPDATA%\BluetoothBatteryMonitor\diagnostics.log` (rotated at 256 KB).

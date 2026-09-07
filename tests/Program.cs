@@ -88,4 +88,25 @@ Check(!mouse.TrySeedBattery(reconnected, 101), "Windows' unknown-battery sentine
 Check(!mouse.TrySeedBattery(reconnected, -1), "Invalid cached battery must remain unknown.");
 Check(mouse.TrySeedBattery(reconnected, 0), "A confirmed connected device can have a genuine cached zero.");
 Check(!mouse.TrySeedBattery(reconnected, 50) && mouse.BatteryLevel == 0, "Zero is a known value, not an uninitialized battery.");
+// The system endpoint can know an in-use paired mouse is connected before
+// the separate Bluetooth object reports it. That mismatch must not hide it.
+Check(ConnectionEvidence.IsConnected(true, true, false), "Windows-connected paired mouse must survive a lagging native status.");
+Check(ConnectionEvidence.IsConnected(true, true, true), "Matching positive connection signals must be accepted.");
+Check(!ConnectionEvidence.IsConnected(true, false, true), "An explicit Windows disconnect must override a stale native connection.");
+Check(!ConnectionEvidence.IsConnected(true, false, false), "Matching negative signals remain disconnected.");
+Check(!ConnectionEvidence.IsConnected(false, true, false), "An unpaired phantom endpoint is not a confirmed connection.");
+Check(!ConnectionEvidence.IsConnected(true, null, false), "Pairing alone does not imply a connection.");
+Check(ConnectionEvidence.IsConnected(true, null, true), "Native status is a fallback when Windows omits the endpoint property.");
+var systemMouse = new MonitorDeviceState("System mouse");
+var systemSession = systemMouse.BeginConnection("paired mouse endpoint");
+Check(systemMouse.ConfirmConnection(systemSession, ConnectionEvidence.IsConnected(true, true, false)), "Confirm the system's connection before waiting for the Bluetooth object.");
+Check(systemMouse.TrySeedBattery(systemSession, 70), "Display Windows' battery for the system-connected mouse immediately.");
+var systemVisible = TrayVisibility.SelectVisible(new[] {
+    new TrayDevice("Headphones", false, true), new TrayDevice("Keyboard", false, false),
+    new TrayDevice(systemMouse.Name, systemMouse.IsConnected, false)
+});
+Check(systemVisible.SetEquals(new[] { systemMouse.Name }), "The Windows-connected mouse replaces the disconnected fallback icon.");
+if (!ConnectionEvidence.IsConnected(true, false, true)) systemMouse.Disconnect();
+Check(systemMouse.StatusText == "Disconnected" && systemMouse.BatteryLevel == null, "A subsequent Windows disconnect clears the seeded battery.");
+Check(!systemMouse.TrySeedBattery(systemSession, 70), "A cache result cannot override a Windows disconnect.");
 Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, and battery status.");
