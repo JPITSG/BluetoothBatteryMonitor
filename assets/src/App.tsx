@@ -15,15 +15,15 @@ export default function App() {
     const el = containerRef.current;
     if (!el || !initData) return;
 
-    const getContentHeight = () =>
-      Math.max(
-        el.scrollHeight,
-        document.documentElement.scrollHeight,
-        document.body?.scrollHeight ?? 0
-      );
-
+    let lastHeight = 0;
     const report = () => {
-      reportHeight(Math.ceil(getContentHeight()));
+      // Measure content, not the viewport: the native dialog must be able to
+      // grow and shrink. Allow for fractional pixels at laptop DPI scales.
+      const height = Math.ceil(Math.max(el.scrollHeight, el.getBoundingClientRect().height)) + 2;
+      if (height !== lastHeight) {
+        lastHeight = height;
+        reportHeight(height);
+      }
     };
 
     requestAnimationFrame(report);

@@ -49,7 +49,7 @@ Output: `release/BluetoothBatteryMonitor.exe`
 
 ## Updates
 
-Version: **1.0.2**.
+Version: **1.0.3**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

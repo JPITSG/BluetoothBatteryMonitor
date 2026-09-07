@@ -61,7 +61,7 @@ export default function ConfigView({ devices, version, autoCheck }: ConfigViewPr
     <div className="p-5 flex flex-col gap-4 max-w-md mx-auto text-xs">
       <section aria-labelledby="monitor-devices" className="space-y-2">
         <h2 id="monitor-devices" className="text-xs font-semibold text-neutral-800">Monitor devices</h2>
-        <div className="rounded-md border border-neutral-200 p-1 max-h-[240px] overflow-y-auto">
+        <div className="rounded-md border border-neutral-200 p-1">
           {devices.length === 0 ? (
             <p className="text-neutral-500 px-3 py-4 text-center">No paired Bluetooth devices found.</p>
           ) : devices.map((device) => (
