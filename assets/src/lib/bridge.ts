@@ -58,4 +58,4 @@ export function reportHeight(height: number) {
   postMessage({ action: "resize", height });
 }
 
-export interface UpdateState { status: string; busy: boolean; canInstall: boolean; automatic: boolean; }
+export interface UpdateState { status: string; busy: boolean; canInstall: boolean; automatic: boolean; currentVersion?: string; remoteVersion?: string; }

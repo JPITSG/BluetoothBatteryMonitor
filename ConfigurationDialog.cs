@@ -106,6 +106,9 @@ namespace BluetoothBatteryMonitor
                         await HandleGetInitAsync();
                         break;
 
+                    case "dismissUpdate":
+                        AppUpdater.Instance.Dismiss();
+                        break;
                     case "getUpdateState":
                         SendUpdateState();
                         break;
@@ -226,7 +229,7 @@ namespace BluetoothBatteryMonitor
         {
             if (IsDisposed || _webView?.CoreWebView2 == null) return;
             var updater = AppUpdater.Instance;
-            var json = JsonSerializer.Serialize(new { status = updater.Status, busy = updater.Busy, canInstall = updater.CanInstall, automatic = updater.AutomaticResult });
+            var json = JsonSerializer.Serialize(new { status = updater.Status, busy = updater.Busy, canInstall = updater.CanInstall, automatic = updater.AutomaticResult, currentVersion = AppUpdater.DisplayVersion, remoteVersion = updater.AvailableVersion });
             _webView.CoreWebView2.PostWebMessageAsJson(json);
         }
 

@@ -26,6 +26,8 @@ internal sealed class AppUpdater : IDisposable
     internal string Status { get; private set; } = "";
     internal bool Busy => _cancellation != null;
     internal bool CanInstall => _staged != null && _available >= CurrentVersion;
+    internal string? AvailableVersion => _available?.ToString(3);
+    internal void Dismiss() { Discard(); Status = ""; Changed?.Invoke(); }
     internal bool AutomaticResult { get; private set; }
     internal static Version CurrentVersion => ReadVersion(Application.ExecutablePath);
     internal static string DisplayVersion => CurrentVersion.ToString(3);
