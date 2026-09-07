@@ -33,7 +33,7 @@ const wait = async (predicate) => {
 };
 function mockHost() {
   const listeners = new Set();
-  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.12' };
+  const state = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.14' };
   const devices = [
     { name: 'Headphones', isConfigured: true },
     { name: 'Keyboard', isConfigured: false },
@@ -53,7 +53,7 @@ function mockHost() {
     postMessage: raw => {
       const message = JSON.parse(raw);
       messages.push(message);
-      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.12', autoCheck: false, loadingDevices: true }), 0);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.14', autoCheck: false, loadingDevices: true }), 0);
       if (message.action === 'getDeviceStatus') setTimeout(() => send({ type: 'deviceStatus', deviceStatuses }), 0);
       if (message.action === 'getUpdateState') setTimeout(() => send(state), 0);
       if (message.action === 'resize') parent.postMessage({ testHeight: message.height }, '*');
@@ -73,12 +73,23 @@ try {
   const button = text => [...doc.querySelectorAll('button')].find(button => button.textContent === text);
   const row = name => [...doc.querySelectorAll('section label')].find(label => label.textContent === name || label.textContent.startsWith(`${name} ·`));
   const checkbox = name => row(name)?.querySelector('input');
+  const deviceOrder = () => [...doc.querySelectorAll('section label')].map(label => label.querySelector('span').firstChild.textContent).join('|');
   const paint = () => new Promise(resolve => frame.contentWindow.requestAnimationFrame(() => frame.contentWindow.requestAnimationFrame(resolve)));
   await paint();
   check(!!button('Update') && doc.body.textContent.includes('Refreshing devices'), 'Footer and saved devices are usable before discovery finishes.');
+  check(doc.querySelector('section h2').textContent === 'Monitored', 'The device card is titled Monitored.');
+  check(deviceOrder() === 'Headphones|Mouse|Keyboard', 'Saved checked devices appear first when configuration opens.');
+  checkbox('Keyboard').focus();
+  checkbox('Keyboard').click();
+  await wait(() => deviceOrder() === 'Headphones|Keyboard|Mouse');
+  check(checkbox('Keyboard').checked && doc.activeElement === checkbox('Keyboard'), 'Checking a device moves it into the top group and keeps keyboard focus.');
+  checkbox('Keyboard').click();
+  await wait(() => deviceOrder() === 'Headphones|Mouse|Keyboard');
+  check(!checkbox('Keyboard').checked, 'Unchecking a device moves it below the checked devices.');
   const statusOf = name => row(name)?.querySelector('span span')?.textContent.replace(/^ · /, '') ?? '';
   check(!doc.querySelector('dl') && row('Mouse').textContent === 'Mouse · Connected · 67%', 'Device status appears inline inside the checkbox card, without a duplicate device list.');
   check(statusOf('Mouse') === 'Connected · 67%' && statusOf('Headphones') === 'Disconnected', 'Initial monitored-device status shows percentages only when connected.');
+  check(frame.contentWindow.getComputedStyle(row('Headphones').querySelector('span span')).color === 'rgb(220, 38, 38)', 'Disconnected status is red.');
   host.send({ type: 'deviceStatus', deviceStatuses: [{ name: 'Headphones', online: true, batteryLevel: null }, { name: 'Mouse', online: false, batteryLevel: null }] });
   await wait(() => statusOf('Mouse') === 'Disconnected');
   check(statusOf('Headphones') === 'Connected · Battery unknown', 'An unknown battery is never fabricated as 0%.');
@@ -121,10 +132,11 @@ try {
   host.send({ type: 'devices', devices: [host.devices[0], host.devices[2], { name: 'Gamepad', isConfigured: false }], loadingDevices: false });
   await wait(() => checkbox('Gamepad'));
   check(!checkbox('Mouse').checked && checkbox('Keyboard').checked, 'Late discovery preserves edits and selected devices missing from the refreshed list.');
+  check(deviceOrder() === 'Headphones|Keyboard|Gamepad|Mouse', 'Late discovery keeps selected devices above new unchecked devices.');
   button('Save').click();
   const saved = host.messages.findLast(message => message.action === 'saveDevices').devices;
   check(saved.includes('Keyboard') && saved.includes('Headphones') && !saved.includes('Mouse'), 'Save sends the edited selection after discovery.');
-  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.12' });
+  host.send({ ...host.state, status: "You're up to date.", canInstall: true, remoteVersion: '1.0.14' });
   await wait(() => doc.querySelector('dialog').open);
   button('Force update').click();
   await wait(() => button('Starting...'));

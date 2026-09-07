@@ -23,6 +23,12 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
   for (const name of selected) {
     if (!visibleDevices.some((device) => device.name === name)) visibleDevices.push({ name, isConfigured: true });
   }
+  // Keep checked devices first on opening, after edits, and after discovery.
+  // Alphabetical order within each group keeps the list predictable.
+  visibleDevices.sort((left, right) =>
+    Number(selected.has(right.name)) - Number(selected.has(left.name)) ||
+    left.name.localeCompare(right.name, undefined, { sensitivity: "base" })
+  );
   const toggle = (name: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -35,8 +41,8 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
   return (
     <div className="p-4 space-y-3 text-xs">
       <div className="space-y-3">
-        <section aria-labelledby="monitor-devices" className="space-y-1">
-          <h2 id="monitor-devices" className="text-xs font-medium leading-none">Monitor devices</h2>
+        <section aria-labelledby="monitored-devices" className="space-y-1">
+          <h2 id="monitored-devices" className="text-xs font-medium leading-none">Monitored</h2>
           <div className="rounded-md border border-neutral-200 p-2 space-y-3" aria-busy={loadingDevices}>
             {visibleDevices.length === 0 ? (
               <p className="text-neutral-500 py-1 text-center">{loadingDevices ? "Finding paired Bluetooth devices…" : "No paired Bluetooth devices found."}</p>
@@ -46,7 +52,7 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
                 <label key={device.name} className="flex items-start gap-2 cursor-pointer select-none">
                   <Checkbox checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
                   <span className="min-w-0 break-words leading-4">{device.name}{status && (
-                    <span className={status.online ? "text-green-700" : "text-neutral-500"}>
+                    <span className={status.online ? "text-green-700" : "text-red-600"}>
                       {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
                   )}</span>
