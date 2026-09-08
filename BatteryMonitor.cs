@@ -142,7 +142,7 @@ namespace BluetoothBatteryMonitor
         // can ask the already-running instance to open its configuration dialog.
         private EventWaitHandle? _showConfigEvent;
         private RegisteredWaitHandle? _showConfigWaitHandle;
-        private bool _configurationDialogOpen;
+        private ConfigurationDialog? _configurationDialog;
         #endregion
 
         #region Constructor and Initialization
@@ -551,7 +551,9 @@ namespace BluetoothBatteryMonitor
 
         private void OnConfigureClick(object? sender, EventArgs e)
         {
-            ShowConfigurationDialog();
+            // Let the tray menu finish closing and returning focus before
+            // activating configuration, regardless of which icon was clicked.
+            _syncContext.Post(_ => ShowConfigurationDialog(), null);
         }
 
         internal event Action? DeviceStatusesChanged;
@@ -571,21 +573,51 @@ namespace BluetoothBatteryMonitor
 
         private void ShowConfigurationDialog()
         {
-            if (_configurationDialogOpen)
-                return;
+            if (_disposeCts.IsCancellationRequested) return;
 
-            _configurationDialogOpen = true;
+            if (_configurationDialog is { IsDisposed: false } existing)
+            {
+                if (!existing.Visible) existing.Show();
+                if (existing.WindowState == FormWindowState.Minimized)
+                    existing.WindowState = FormWindowState.Normal;
+                existing.BringToFront();
+                existing.Activate();
+                return;
+            }
+
+            var dialog = new ConfigurationDialog(this);
+            _configurationDialog = dialog;
+            dialog.FormClosed += OnConfigurationDialogClosed;
             try
             {
-                using var dialog = new ConfigurationDialog(this);
-                if (dialog.ShowDialog() == DialogResult.OK)
-                {
-                    ReloadConfiguration();
-                }
+                // ShowDialog implicitly owns the dialog with the active tray
+                // window. Foregrounding that window to open its menu then also
+                // raises configuration. An unowned, modeless window keeps those
+                // actions independent and leaves every tray menu usable.
+                dialog.Show();
             }
-            finally
+            catch
             {
-                _configurationDialogOpen = false;
+                _configurationDialog = null;
+                dialog.FormClosed -= OnConfigurationDialogClosed;
+                dialog.Dispose();
+                throw;
+            }
+        }
+
+        private void OnConfigurationDialogClosed(object? sender, FormClosedEventArgs e)
+        {
+            if (sender is not ConfigurationDialog dialog) return;
+            dialog.FormClosed -= OnConfigurationDialogClosed;
+            if (ReferenceEquals(_configurationDialog, dialog)) _configurationDialog = null;
+            if (dialog.DialogResult == DialogResult.OK)
+            {
+                // A modeless form disposes after FormClosed. Defer rebuilding
+                // icons/subscriptions until its WebView callback has unwound.
+                _syncContext.Post(_ =>
+                {
+                    if (!_disposeCts.IsCancellationRequested) ReloadConfiguration();
+                }, null);
             }
         }
 
@@ -1493,6 +1525,12 @@ namespace BluetoothBatteryMonitor
             try
             {
                 _disposeCts.Cancel();
+                if (_configurationDialog != null)
+                {
+                    _configurationDialog.FormClosed -= OnConfigurationDialogClosed;
+                    _configurationDialog.Dispose();
+                    _configurationDialog = null;
+                }
 
                 SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
                 SystemEvents.SessionSwitch -= OnSessionSwitch;

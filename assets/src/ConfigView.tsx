@@ -56,7 +56,7 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
                     <span className={status.online ? "text-green-700" : "text-red-600"}>
                       {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
-                  )}<LastCharged timestamp={status?.lastChargedAt} /></span>
+                  )}{status && <LastCharged timestamp={status.lastChargedAt} />}</span>
                 </label>
               );
             })}

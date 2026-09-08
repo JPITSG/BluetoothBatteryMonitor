@@ -6,14 +6,15 @@ const olderDateFormat = new Intl.DateTimeFormat(undefined, {
 });
 
 export default function LastCharged({ timestamp }: { timestamp?: string | null }) {
-  if (!timestamp) return null;
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return null;
-  const formatter = date.getFullYear() === new Date().getFullYear() ? dateFormat : olderDateFormat;
+  const parsed = timestamp ? new Date(timestamp) : null;
+  const date = parsed && !Number.isNaN(parsed.getTime()) ? parsed : null;
+  const formatter = date?.getFullYear() === new Date().getFullYear() ? dateFormat : olderDateFormat;
   return (
     <span className="block text-neutral-500 text-[11px] leading-snug mt-0.5"
-      title={`Detected a battery increase of at least 5 percentage points. Observed ${date.toLocaleString()}.`}>
-      Last charged · <time dateTime={timestamp}>{formatter.format(date)}</time>
+      title={date
+        ? `Detected a battery increase of at least 5 percentage points. Observed ${date.toLocaleString()}.`
+        : "Waiting for a battery increase of at least 5 percentage points."}>
+      Last charged · {date ? <time dateTime={timestamp ?? undefined}>{formatter.format(date)}</time> : "Collecting data"}
     </span>
   );
 }

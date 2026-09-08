@@ -103,6 +103,7 @@ namespace BluetoothBatteryMonitor
 
         private async void OnWebMessageReceived(object? sender, CoreWebView2WebMessageReceivedEventArgs e)
         {
+            if (_lifetime.IsCancellationRequested || DialogResult != DialogResult.None) return;
             try
             {
                 var raw = e.TryGetWebMessageAsString();
@@ -145,8 +146,7 @@ namespace BluetoothBatteryMonitor
                         break;
 
                     case "close":
-                        DialogResult = DialogResult.Cancel;
-                        Close();
+                        CloseAfterWebMessage(DialogResult.Cancel);
                         break;
 
                     case "resize":
@@ -309,10 +309,17 @@ namespace BluetoothBatteryMonitor
                     .ToList();
 
                 BatteryMonitor.SaveDevicesToRegistry(devices);
-                DialogResult = DialogResult.OK;
-                Close();
+                CloseAfterWebMessage(DialogResult.OK);
             }
             catch { }
+        }
+
+        private void CloseAfterWebMessage(DialogResult result)
+        {
+            DialogResult = result;
+            // A modeless Close disposes its controls immediately. Let WebView2
+            // return from its message callback before disposing the browser.
+            BeginInvoke(new Action(() => { if (!IsDisposed) Close(); }));
         }
 
         private static async Task<List<string>> EnumeratePairedDevicesAsync()

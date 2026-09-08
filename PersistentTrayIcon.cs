@@ -106,7 +106,10 @@ internal sealed class PersistentTrayIcon : NativeWindow, IDisposable
 
     private void OnMenuClosed(object? sender, ToolStripDropDownClosedEventArgs e)
     {
-        if (!_disposed) _registration.ReturnFocus(Handle);
+        // A selected command may activate configuration or Windows Settings;
+        // only return keyboard focus to the tray when dismissing the menu.
+        if (!_disposed && e.CloseReason != ToolStripDropDownCloseReason.ItemClicked)
+            _registration.ReturnFocus(Handle);
     }
 
     public void Dispose()

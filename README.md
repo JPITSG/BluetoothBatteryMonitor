@@ -23,6 +23,9 @@ On first launch, a sentinel battery icon appears in the tray. Right-click it and
 ## Usage
 
 - **Right-click** any tray icon for status info, configuration, or to exit
+- Right-click opens only the tray menu. Choose **Configuration** on any device's
+  menu to open configuration or restore the existing window to the foreground,
+  preserving unsaved edits. Configuration remains available in the taskbar.
 - **Double-click** any device icon to open Windows Bluetooth settings
 - **`--listdevices`** flag: shows all paired Bluetooth devices in a dialog and exits
 
@@ -47,8 +50,9 @@ are excluded from the comparison so a disconnected sentinel cannot fabricate a
 charge. The first usable reading establishes the baseline. **Last charged**
 appears below the device's connection status in configuration, in local time,
 and remains visible while disconnected. This is the time the increase was
-observed, not the exact time charging began or ended. No line appears until a
-charge is detected. The last-charge timestamp survives restarts and log trimming.
+observed, not the exact time charging began or ended. Until a charge is detected,
+the line shows **Last charged · Collecting data**. The last-charge timestamp
+survives restarts and log trimming.
 
 File operations run in the background; changed logs are replaced atomically and
 pending saves finish on normal exit or update. Duplicate readings, including
@@ -98,7 +102,7 @@ handoff still require Windows verification.
 
 ## Updates
 
-Version: **1.0.15**.
+Version: **1.0.16**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
