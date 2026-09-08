@@ -102,7 +102,7 @@ Native WebView2 startup and the installer handoff still require Windows verifica
 
 ## Updates
 
-Version: **1.0.19**.
+Version: **1.0.20**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
