@@ -102,7 +102,7 @@ Native WebView2 startup and the installer handoff still require Windows verifica
 
 ## Updates
 
-Version: **1.0.18**.
+Version: **1.0.19**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
@@ -142,6 +142,11 @@ Cached values only fill an unknown percentage and never establish a connection.
 Connection state follows Windows' explicit connection flag for each paired
 Bluetooth endpoint. The Bluetooth object's status is a fallback when Windows
 does not provide that flag. Battery values never establish a connection.
+If Windows rejects a native device ID or returns no device, that endpoint's
+cached connected flag is discarded and monitoring tries another paired endpoint
+with the same name. This handles stale entries left by other Bluetooth adapters.
+Rejected endpoints remain eligible on later polling attempts. Diagnostic errors
+include the device name and endpoint ID to distinguish duplicate entries.
 
 Device enumeration retries with connection-only properties when battery-property
 queries fail. Errors are recorded locally in

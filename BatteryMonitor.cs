@@ -891,7 +891,7 @@ namespace BluetoothBatteryMonitor
             !_disposeCts.IsCancellationRequested && entry.Generation == generation &&
             _devices.TryGetValue(entry.Name, out var current) && ReferenceEquals(current, entry);
 
-        private static bool IsDeviceConnected(DeviceInfo entry) => ConnectionEvidence.IsConnected(
+        private static bool IsDeviceConnected(DeviceInfo entry) => !entry.EndpointRejected && ConnectionEvidence.IsConnected(
             entry.IsPaired, entry.WindowsConnected, IsNativeConnected(entry));
 
         private static bool IsNativeConnected(DeviceInfo entry)
@@ -969,31 +969,47 @@ namespace BluetoothBatteryMonitor
         private async Task OpenNativeDeviceAsync(DeviceInfo entry, long generation)
         {
             if (!IsCurrentDevice(entry, generation) || entry.DeviceId == null ||
+                entry.EndpointRejected ||
                 entry.BluetoothDevice != null || entry.ClassicDevice != null || entry.NativeOpenGeneration == generation) return;
             entry.NativeOpenGeneration = generation;
+            string deviceId = entry.DeviceId;
             try
             {
-                bool classic = entry.DeviceId.StartsWith("Bluetooth#", StringComparison.OrdinalIgnoreCase) &&
-                    !entry.DeviceId.Contains("BluetoothLE", StringComparison.OrdinalIgnoreCase);
+                bool classic = deviceId.StartsWith("Bluetooth#", StringComparison.OrdinalIgnoreCase) &&
+                    !deviceId.Contains("BluetoothLE", StringComparison.OrdinalIgnoreCase);
                 if (classic)
                 {
                     entry.ConnectionType = DeviceConnectionType.BluetoothClassic;
-                    var device = await BluetoothDevice.FromIdAsync(entry.DeviceId);
+                    var device = await BluetoothDevice.FromIdAsync(deviceId);
                     if (!IsCurrentDevice(entry, generation)) { device?.Dispose(); return; }
+                    if (device == null) { RejectNativeEndpoint(entry, generation, deviceId); return; }
                     entry.ClassicDevice = device;
-                    if (device != null) device.ConnectionStatusChanged += OnClassicConnectionStatusChanged;
+                    device.ConnectionStatusChanged += OnClassicConnectionStatusChanged;
                 }
                 else
                 {
                     entry.ConnectionType = DeviceConnectionType.BluetoothLe;
-                    var device = await BluetoothLEDevice.FromIdAsync(entry.DeviceId);
+                    var device = await BluetoothLEDevice.FromIdAsync(deviceId);
                     if (!IsCurrentDevice(entry, generation)) { device?.Dispose(); return; }
+                    if (device == null) { RejectNativeEndpoint(entry, generation, deviceId); return; }
                     entry.BluetoothDevice = device;
-                    if (device != null) device.ConnectionStatusChanged += OnLeConnectionStatusChanged;
+                    device.ConnectionStatusChanged += OnLeConnectionStatusChanged;
                 }
             }
-            catch (Exception ex) { LogMonitorError("Open Bluetooth device", ex); }
+            catch (Exception ex) when (ex.HResult == unchecked((int)0x80070057))
+            {
+                RejectNativeEndpoint(entry, generation, deviceId, ex);
+            }
+            catch (Exception ex) { LogMonitorError($"Open Bluetooth device '{entry.Name}' [{deviceId}]", ex); }
             finally { if (entry.NativeOpenGeneration == generation) entry.NativeOpenGeneration = null; }
+        }
+
+        private void RejectNativeEndpoint(DeviceInfo entry, long generation, string deviceId, Exception? error = null)
+        {
+            if (!IsCurrentDevice(entry, generation) || !entry.TryRejectEndpoint(generation)) return;
+            LogMonitorError($"Reject Bluetooth endpoint '{entry.Name}' [{deviceId}]",
+                error ?? new InvalidOperationException("Windows returned no native Bluetooth device for this endpoint."));
+            UpdateDeviceIcon(entry.Name);
         }
 
         private async void OnLeConnectionStatusChanged(BluetoothLEDevice sender, object args)
@@ -1562,7 +1578,11 @@ namespace BluetoothBatteryMonitor
                 {
                     if (currentEndpoint != null) TryUpdateBatteryFromProperties(currentEndpoint, entry.Name);
                     await RefreshBatteryAsync(entry, generation);
-                    return;
+                    // Native opening may reject a phantom endpoint despite its
+                    // cached IsConnected flag. Try the other same-name endpoints
+                    // in this pass, while respecting intervening watcher events.
+                    if (!IsCurrentDevice(entry, generation)) return;
+                    if (entry.IsConnected && IsDeviceConnected(entry)) return;
                 }
                 // Let a native connection probe finish when Windows has not yet
                 // supplied a connection flag. An explicit disconnect still wins.

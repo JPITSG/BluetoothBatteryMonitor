@@ -13,6 +13,7 @@ internal class MonitorDeviceState
     public string? DeviceId { get; private set; }
     public long Generation { get; private set; }
     public bool IsConnected { get; private set; }
+    public bool EndpointRejected { get; private set; }
     public int? BatteryLevel { get; private set; }
     public DateTime? LastUpdate { get; private set; }
     // Keep the transport subscription alive so a later positive reading can
@@ -31,8 +32,21 @@ internal class MonitorDeviceState
 
     public bool ConfirmConnection(long generation, bool connectionConfirmed)
     {
-        if (generation != Generation || !connectionConfirmed) return false;
+        if (generation != Generation || EndpointRejected || !connectionConfirmed) return false;
         IsConnected = true;
+        return true;
+    }
+
+    // An AEP can retain IsConnected=true for a missing adapter. A failed native
+    // endpoint validation overrides that flag for this attempt, without letting
+    // a late rejection invalidate a newer connection.
+    public bool TryRejectEndpoint(long generation)
+    {
+        if (generation != Generation) return false;
+        EndpointRejected = true;
+        IsConnected = false;
+        BatteryLevel = null;
+        LastUpdate = null;
         return true;
     }
 
@@ -40,6 +54,7 @@ internal class MonitorDeviceState
     {
         Generation++;
         IsConnected = false;
+        EndpointRejected = false;
         BatteryLevel = null;
         LastUpdate = null;
     }
