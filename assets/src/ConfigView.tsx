@@ -18,16 +18,21 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(devices.filter((device) => device.isConfigured).map((device) => device.name))
   );
+  const statusByName = new Map(statuses.map((status) => [status.name.toLowerCase(), status]));
   // Discovery cannot undo edits made while it was running, including a selected
   // cached device which Windows temporarily leaves out of its refreshed list.
   const visibleDevices = [...devices];
   for (const name of selected) {
     if (!visibleDevices.some((device) => device.name === name)) visibleDevices.push({ name, isConfigured: true });
   }
-  // Keep checked devices first on opening, after edits, and after discovery.
-  // Alphabetical order within each group keeps the list predictable.
+  // Keep checked devices first, with connected devices leading that group.
+  // Preserve alphabetical order within each group, including unchecked devices.
   visibleDevices.sort((left, right) =>
     Number(selected.has(right.name)) - Number(selected.has(left.name)) ||
+    (selected.has(left.name) && selected.has(right.name)
+      ? Number(statusByName.get(right.name.toLowerCase())?.online ?? false) -
+        Number(statusByName.get(left.name.toLowerCase())?.online ?? false)
+      : 0) ||
     left.name.localeCompare(right.name, undefined, { sensitivity: "base" })
   );
   const toggle = (name: string) => {
@@ -48,7 +53,7 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
             {visibleDevices.length === 0 ? (
               <p className="text-neutral-500 py-1 text-center">{loadingDevices ? "Finding paired Bluetooth devices…" : "No paired Bluetooth devices found."}</p>
             ) : visibleDevices.map((device) => {
-              const status = statuses.find((item) => item.name.toLowerCase() === device.name.toLowerCase());
+              const status = statusByName.get(device.name.toLowerCase());
               return (
                 <label key={device.name} className="flex items-start gap-2 cursor-pointer select-none">
                   <Checkbox checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
