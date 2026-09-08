@@ -102,7 +102,7 @@ Native WebView2 startup and the installer handoff still require Windows verifica
 
 ## Updates
 
-Version: **1.0.17**.
+Version: **1.0.18**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
@@ -127,6 +127,17 @@ that confirmation and is not saved. Configuration displays the installed version
 when next opened after the update.
 
 ## Connection troubleshooting
+
+After startup, wake from sleep/hibernation, or session unlock, the app checks
+Windows' connection/battery state immediately after a short debounce and retries
+every three seconds for 30 seconds while Bluetooth settles. Devices recover
+independently, so an idle peripheral cannot hold up another device's battery.
+Existing LE battery characteristics are re-read when a percentage is missing,
+a previous read/subscription failed, or a wake refresh was requested. Windows'
+GATT cache is checked first, followed by a live read and notification subscription.
+Failed read handles are rediscovered; individual battery reads/subscriptions time
+out after ten seconds. After the recovery period, regular polling continues.
+Cached values only fill an unknown percentage and never establish a connection.
 
 Connection state follows Windows' explicit connection flag for each paired
 Bluetooth endpoint. The Bluetooth object's status is a fallback when Windows
