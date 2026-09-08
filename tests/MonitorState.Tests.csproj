@@ -11,5 +11,6 @@
     <Compile Include="../TrayIconIdentity.cs" Link="TrayIconIdentity.cs" />
     <Compile Include="../TrayIconRegistration.cs" Link="TrayIconRegistration.cs" />
     <Compile Include="../UpdateDownload.cs" Link="UpdateDownload.cs" />
+    <Compile Include="../UpdateLaunchArguments.cs" Link="UpdateLaunchArguments.cs" />
   </ItemGroup>
 </Project>

@@ -27,8 +27,8 @@ namespace BluetoothBatteryMonitor
                 return;
             }
 
-            bool updateCompleted = args.Length == 2 && args[0] == "--update-completed";
-            bool configure = HasConfigureFlag(args) || updateCompleted;
+            bool updateCompleted = UpdateLaunchArguments.TryReadCompleted(args, out string updateHelper, out bool reopenSettings);
+            bool configure = HasConfigureFlag(args) || (updateCompleted && reopenSettings);
 
             // Single instance check
             const string mutexName = "Global\\BluetoothBatteryMonitor_SingleInstance";
@@ -54,12 +54,14 @@ namespace BluetoothBatteryMonitor
                 Application.EnableVisualStyles();
                 Application.SetCompatibleTextRenderingDefault(false);
 
-                using var monitor = new BatteryMonitor(configure);
+                // An unchecked update choice also suppresses the first-run prompt
+                // when no devices are configured. Ordinary launches keep it.
+                using var monitor = new BatteryMonitor(configure, configureIfEmpty: !updateCompleted);
                 AppUpdater.Instance.UpdateAvailable += SignalShowConfiguration;
                 if (updateCompleted)
                 {
                     AppUpdater.Instance.StatusAfterUpdate();
-                    _ = AppUpdater.CleanupHelperAsync(args[1]);
+                    _ = AppUpdater.CleanupHelperAsync(updateHelper);
                 }
                 else AppUpdater.Instance.Start();
                 Application.Run(monitor);

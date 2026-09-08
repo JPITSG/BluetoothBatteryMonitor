@@ -25,6 +25,7 @@ internal sealed class AppUpdater : IDisposable
     internal event Action? Changed;
     internal event Action? UpdateAvailable;
     internal string Status { get; private set; } = "";
+    internal long? DownloadKilobytesPerSecond { get; private set; }
     internal bool Busy => _cancellation != null || _installing;
     internal bool Installing => _installing;
     internal bool CanInstall => _staged != null && _available >= CurrentVersion;
@@ -68,6 +69,7 @@ internal sealed class AppUpdater : IDisposable
             return;
         }
         Discard();
+        DownloadKilobytesPerSecond = null;
         AutomaticResult = automatic;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         _cancellation = cancellation;
@@ -77,11 +79,12 @@ internal sealed class AppUpdater : IDisposable
         {
             Status = "Checking for updates…";
             Changed?.Invoke();
-            var progress = new Progress<string>(status =>
+            var progress = new Progress<DownloadProgress>(download =>
             {
                 // Progress can already be queued when cancellation/completion wins.
                 if (!acceptingProgress || !ReferenceEquals(_cancellation, cancellation) || cancellation.IsCancellationRequested) return;
-                Status = status;
+                DownloadKilobytesPerSecond = download.KilobytesPerSecond;
+                Status = $"Downloading… {download.Percent}% ({download.KilobytesPerSecond} KB/s)";
                 Changed?.Invoke();
             });
             _available = await Task.Run(() => UpdateDownload.StageAsync(
@@ -99,6 +102,7 @@ internal sealed class AppUpdater : IDisposable
         finally
         {
             acceptingProgress = false;
+            DownloadKilobytesPerSecond = null;
             await Task.Run(() => Delete(path));
             _cancellation = null;
             Changed?.Invoke();
@@ -130,7 +134,7 @@ internal sealed class AppUpdater : IDisposable
             throw new InvalidDataException("The update is not a valid 64-bit executable.");
         return ReadVersion(path);
     }
-    internal async Task InstallAsync()
+    internal async Task InstallAsync(bool reopenSettings)
     {
         if (Busy || !CanInstall) return;
         var staged = _staged!;
@@ -152,10 +156,8 @@ internal sealed class AppUpdater : IDisposable
                 string probe = Path.Combine(Path.GetDirectoryName(executable)!, Guid.NewGuid() + ".tmp");
                 try { using (File.Create(probe)) { } File.Delete(probe); }
                 catch (UnauthorizedAccessException) { info.Verb = "runas"; }
-                info.ArgumentList.Add("--apply-update");
-                info.ArgumentList.Add(Environment.ProcessId.ToString());
-                info.ArgumentList.Add(executable);
-                info.ArgumentList.Add(staged);
+                foreach (var argument in UpdateLaunchArguments.Apply(Environment.ProcessId, executable, staged, reopenSettings))
+                    info.ArgumentList.Add(argument);
                 return info;
             });
             using var ready = new EventWaitHandle(false, EventResetMode.ManualReset, "Local\\BluetoothBatteryMonitor_UpdateReady_" + Environment.ProcessId);
@@ -183,7 +185,8 @@ internal sealed class AppUpdater : IDisposable
         bool replaced = false;
         try
         {
-            if (args.Length != 4 || !int.TryParse(args[1], out int pid)) throw new ArgumentException("Invalid update arguments.");
+            if (!UpdateLaunchArguments.TryReadApply(args, out int pid, out bool reopenSettings))
+                throw new ArgumentException("Invalid update arguments.");
             string target = Path.GetFullPath(args[2]);
             string staged = Path.GetFullPath(args[3]);
             if (ReadVersion(staged) < ReadVersion(target)) throw new InvalidDataException("Downgrades are disabled.");
@@ -202,8 +205,8 @@ internal sealed class AppUpdater : IDisposable
                 File.Replace(replacement, target, backup);
                 replaced = true;
                 var start = new ProcessStartInfo(target) { UseShellExecute = true };
-                start.ArgumentList.Add("--update-completed");
-                start.ArgumentList.Add(Application.ExecutablePath);
+                foreach (var argument in UpdateLaunchArguments.Completed(Application.ExecutablePath, reopenSettings))
+                    start.ArgumentList.Add(argument);
                 if (Process.Start(start) == null) throw new IOException("Could not restart the application.");
                 Delete(backup);
             }

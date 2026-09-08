@@ -146,7 +146,7 @@ namespace BluetoothBatteryMonitor
         #endregion
 
         #region Constructor and Initialization
-        public BatteryMonitor(bool forceConfiguration = false)
+        public BatteryMonitor(bool forceConfiguration = false, bool configureIfEmpty = true)
         {
             _syncContext = SynchronizationContext.Current ?? new WindowsFormsSynchronizationContext();
             _disposeCts = new CancellationTokenSource();
@@ -168,7 +168,7 @@ namespace BluetoothBatteryMonitor
 
             LoadBatteryIcons();
             InitializeDevices();
-            bool shouldShowConfigurationOnLaunch = forceConfiguration || _devices.Count == 0;
+            bool shouldShowConfigurationOnLaunch = forceConfiguration || (configureIfEmpty && _devices.Count == 0);
             CreateTrayIcons();
 
             _uiRefreshTimer = new System.Windows.Forms.Timer

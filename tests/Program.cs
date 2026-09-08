@@ -173,5 +173,6 @@ available = true;
 Check(retryRegistration.Update(window, iconHandle, "Mouse", true), "Retry when Explorer becomes available.");
 Check(retryCalls.SequenceEqual(new[] { TrayCommand.Add, TrayCommand.Add, TrayCommand.SetVersion }), "A failed add must not be mistaken for a registered icon.");
 await UpdateDownloadTests.RunAsync(Check);
+UpdateLaunchArgumentsTests.Run(Check);
 await BatteryHistoryTests.RunAsync(Check);
 Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, battery status, persistent tray registration, update downloads, and battery history.");

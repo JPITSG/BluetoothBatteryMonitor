@@ -28,6 +28,7 @@ export interface UpdateState {
   installing: boolean;
   canInstall: boolean;
   automatic: boolean;
+  downloadKilobytesPerSecond?: number | null;
   currentVersion?: string;
   remoteVersion?: string;
 }

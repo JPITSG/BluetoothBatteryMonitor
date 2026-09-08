@@ -93,8 +93,8 @@ To run the configuration UI checks, build the frontend with `make frontend`,
 serve the repository with `python3 -m http.server 8782 --bind 127.0.0.1`, and open
 `http://127.0.0.1:8782/tests/config-ui.html` in a browser. This uses a simulated
 WebView host to check immediate update/cancel feedback, delayed device discovery,
-selection preservation, and scrolling. Native WebView2 startup and the installer
-handoff still require Windows verification.
+selection preservation, live download speed, per-update reopening, and scrolling.
+Native WebView2 startup and the installer handoff still require Windows verification.
 
 ## License
 
@@ -102,7 +102,7 @@ handoff still require Windows verification.
 
 ## Updates
 
-Version: **1.0.16**.
+Version: **1.0.17**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
@@ -112,12 +112,19 @@ persists across restarts and only affects automatic checks.
 The updater downloads the executable from this repository's
 `main/release/BluetoothBatteryMonitor.exe` on GitHub, validates its size, architecture,
 product identity and embedded Windows version, and shows both versions. Downloads
-show progress and speed and can be cancelled. **Update** replaces the
+show progress in the tooltip and live speed in the red button, for example
+**Checking (100kb/s)...**. Speed is rounded to whole kilobytes per second
+(1 KB = 1,024 bytes), sampled every 250 ms, and falls to zero when transfer stalls.
+Click the red button to cancel the check/download. **Update** replaces the
 executable and restarts the app; **Force update** reinstalls an equal version.
 Older versions are never installed. A helper waits for the running app to exit,
 keeps a backup during replacement, and restores it if launching the new executable
-fails. Protected installation folders request Windows elevation. After a successful
-update, configuration displays the installed version.
+fails. Protected installation folders request Windows elevation. The confirmation
+includes an unchecked **Reopen settings after update** checkbox.
+Check it to reopen configuration after a successful update and restart; otherwise
+the app restarts in the tray with settings closed. This choice applies only to
+that confirmation and is not saved. Configuration displays the installed version
+when next opened after the update.
 
 ## Connection troubleshooting
 
