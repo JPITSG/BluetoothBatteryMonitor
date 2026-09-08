@@ -175,4 +175,5 @@ Check(retryCalls.SequenceEqual(new[] { TrayCommand.Add, TrayCommand.Add, TrayCom
 await UpdateDownloadTests.RunAsync(Check);
 UpdateLaunchArgumentsTests.Run(Check);
 await BatteryHistoryTests.RunAsync(Check);
-Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, battery status, persistent tray registration, update downloads, and battery history.");
+BatteryRefreshTests.Run(Check);
+Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, battery status, persistent tray registration, update downloads, battery history, and battery recovery.");
