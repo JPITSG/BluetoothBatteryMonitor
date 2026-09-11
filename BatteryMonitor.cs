@@ -154,7 +154,7 @@ namespace BluetoothBatteryMonitor
             _batteryHistory = new BatteryHistoryStore(System.IO.Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "BluetoothBatteryMonitor", "battery-history"), LogMonitorError);
-            _batteryHistory.LastChargeChanged += OnBatteryHistoryChanged;
+            _batteryHistory.Changed += OnBatteryHistoryChanged;
 
             _devices = new Dictionary<string, DeviceInfo>(StringComparer.OrdinalIgnoreCase);
             _trayIcons = new Dictionary<string, PersistentTrayIcon>();
@@ -587,7 +587,11 @@ namespace BluetoothBatteryMonitor
 
         internal DeviceStatus[] GetDeviceStatuses() => _devices.Values
             .OrderBy(device => device.Name, StringComparer.OrdinalIgnoreCase)
-            .Select(device => device.DisplayStatus with { LastChargedAt = _batteryHistory.GetLastChargedAt(device.Name) }).ToArray();
+            .Select(device => device.DisplayStatus with
+            {
+                LastChargedAt = _batteryHistory.GetLastChargedAt(device.Name),
+                Trend = _batteryHistory.GetTrend(device.Name)
+            }).ToArray();
 
         private void OnBatteryHistoryChanged()
         {
@@ -1719,7 +1723,7 @@ namespace BluetoothBatteryMonitor
             catch { }
             finally
             {
-                _batteryHistory.LastChargeChanged -= OnBatteryHistoryChanged;
+                _batteryHistory.Changed -= OnBatteryHistoryChanged;
                 _batteryHistory.Dispose();
             }
         }

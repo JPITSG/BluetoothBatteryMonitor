@@ -7,7 +7,7 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 - Per-device system tray icons with battery level indicators (full, good, medium, low, empty)
 - One monitored device always keeps its tray icon. With multiple devices, only connected devices appear; when all disconnect, the last visible icon remains with a **Disconnected** status. With none configured, a configuration icon stays available.
 - Supports Bluetooth LE (GATT Battery Service), Bluetooth Classic (HFP via CfgMgr32), and Windows device property fallback
-- WebView2 configuration dialog for selecting which paired devices to monitor, with checked devices first and live connected/disconnected and battery status beside each monitored device checkbox
+- WebView2 configuration dialog for selecting which paired devices to monitor, with checked devices first (connected ones leading), live connected/disconnected and battery status beside each monitored device checkbox, and a small battery trend graph for the current discharge or charge
 - Device configuration persisted in Windows Registry (`HKCU\SOFTWARE\JPIT\BluetoothBatteryMonitor`)
 - Zero-percent readings follow disconnected status and tray visibility rules. Disconnected and unknown batteries use the plain empty-battery icon.
 - Each device has a stable tray GUID so Explorer can retain its preferences across app restarts, updates, and connection changes. After upgrading from older icons, arrange the icons once; subsequent launches reuse those identities. Keep the executable at the same path.
@@ -54,6 +54,18 @@ observed, not the exact time charging began or ended. Until a charge is detected
 the line shows **Last charged · Collecting data**. The last-charge timestamp
 survives restarts and log trimming.
 
+Beside each monitored device, configuration draws a small graph of the current
+discharge or charge: the readings since the last charge ended (the peak) or since
+charging last began (the trough), whichever is nearer, on a fixed 0–100% scale
+with three dates or times along the bottom. A move of at least five points
+against the current direction is a turning point; smaller reversals are treated
+as reporting noise, matching charge detection. While a device is connected with a
+known percentage, the line continues at that level to the present, because the
+next change would have been logged; a disconnected device's graph ends at its
+last reading. Hovering the graph shows the change, when it began, and the
+approximate rate per hour or per day. Devices with fewer than two usable readings
+show no graph. Zero readings are never plotted.
+
 File operations run in the background; changed logs are replaced atomically and
 pending saves finish on normal exit or update. Duplicate readings, including
 after restarting, do not rewrite the log. Turning monitoring off stops new
@@ -84,7 +96,7 @@ settings or writing any history.
 ```bash
 make          # full build: frontend + .NET publish
 make clean    # remove all build artifacts
-make test     # connection, tray, update-download, and battery-history regression checks
+make test     # connection, tray, update-download, battery-history, and trend regression checks
 ```
 
 Output: `release/BluetoothBatteryMonitor.exe`
@@ -93,7 +105,8 @@ To run the configuration UI checks, build the frontend with `make frontend`,
 serve the repository with `python3 -m http.server 8782 --bind 127.0.0.1`, and open
 `http://127.0.0.1:8782/tests/config-ui.html` in a browser. This uses a simulated
 WebView host to check immediate update/cancel feedback, delayed device discovery,
-selection preservation, live download speed, per-update reopening, and scrolling.
+selection preservation, live download speed, per-update reopening, checkbox alignment,
+battery trend graphs, and scrolling.
 Native WebView2 startup and the installer handoff still require Windows verification.
 
 ## License
@@ -102,7 +115,7 @@ Native WebView2 startup and the installer handoff still require Windows verifica
 
 ## Updates
 
-Version: **1.0.20**.
+Version: **1.0.21**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

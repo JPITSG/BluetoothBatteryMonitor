@@ -4,16 +4,26 @@ import { Label } from "./components/ui/label";
 import { saveDevices, onHostMessage, postMessage, type InitData } from "./lib/bridge";
 import UpdateControls from "./UpdateControls";
 import LastCharged from "./LastCharged";
+import BatteryTrend from "./BatteryTrend";
 
 export default function ConfigView({ devices, version, autoCheck, loadingDevices, deviceError, deviceStatuses }: InitData) {
   const [automatic, setAutomatic] = useState(autoCheck);
   const [statuses, setStatuses] = useState(deviceStatuses);
+  // Trend graphs extend a connected device's level to the present.
+  const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const unsubscribe = onHostMessage((message) => {
-      if (message.type === "deviceStatus") setStatuses(message.deviceStatuses);
+      if (message.type === "deviceStatus") {
+        setStatuses(message.deviceStatuses);
+        setNow(Date.now());
+      }
     });
     postMessage({ action: "getDeviceStatus" });
-    return unsubscribe;
+    const clock = setInterval(() => setNow(Date.now()), 60_000);
+    return () => {
+      unsubscribe();
+      clearInterval(clock);
+    };
   }, []);
   const [selected, setSelected] = useState<Set<string>>(
     () => new Set(devices.filter((device) => device.isConfigured).map((device) => device.name))
@@ -56,12 +66,14 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
               const status = statusByName.get(device.name.toLowerCase());
               return (
                 <label key={device.name} className="flex items-start gap-2 cursor-pointer select-none">
-                  <Checkbox checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
-                  <span className="min-w-0 break-words leading-4">{device.name}{status && (
+                  {/* Segoe UI glyphs sit low in the 16px line box; 1px centres the box on the name. */}
+                  <Checkbox className="mt-px" checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
+                  <span className="min-w-0 flex-1 break-words leading-4">{device.name}{status && (
                     <span className={status.online ? "text-green-700" : "text-red-600"}>
                       {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
                   )}{status && <LastCharged timestamp={status.lastChargedAt} />}</span>
+                  {status && <BatteryTrend readings={status.trend} online={status.online} batteryLevel={status.batteryLevel} now={now} />}
                 </label>
               );
             })}

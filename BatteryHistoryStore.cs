@@ -13,6 +13,44 @@ namespace BluetoothBatteryMonitor;
 
 internal sealed record BatteryHistoryEntry(DateTimeOffset ObservedAt, int Percentage);
 
+// The readings plotted in configuration: the current discharge since the last
+// charge ended, or the current charge since it began, whichever is nearer.
+internal static class BatteryTrend
+{
+    // A reversal of fewer points than this is reporting noise, not a new charge
+    // or discharge. It matches the charge detection threshold.
+    public const int TurningPointThreshold = 5;
+
+    public static BatteryHistoryEntry[] Select(IReadOnlyList<BatteryHistoryEntry> entries)
+    {
+        // Zero is the disconnected sentinel and is never plotted.
+        var readings = entries.Where(entry => entry.Percentage > 0).ToList();
+        if (readings.Count == 0) return Array.Empty<BatteryHistoryEntry>();
+        int last = readings.Count - 1;
+        // The direction is set by the nearest earlier reading that differs from
+        // the newest one by at least the threshold. Without one, nothing has
+        // happened yet and every reading is shown.
+        int direction = 0;
+        for (int i = last - 1; i >= 0 && direction == 0; i--)
+        {
+            int difference = readings[last].Percentage - readings[i].Percentage;
+            if (Math.Abs(difference) >= TurningPointThreshold) direction = Math.Sign(difference);
+        }
+        if (direction == 0) return readings.ToArray();
+        // Walk back to the turning point: the peak before a discharge or the
+        // trough before a charge, where earlier readings are at least the
+        // threshold beyond it in the opposite direction.
+        int start = last;
+        for (int i = last - 1; i >= 0; i--)
+        {
+            int beyond = (readings[i].Percentage - readings[start].Percentage) * direction;
+            if (beyond >= TurningPointThreshold) break;
+            if (beyond <= 0) start = i;
+        }
+        return readings.Skip(start).ToArray();
+    }
+}
+
 internal sealed class DeviceBatteryHistory
 {
     public const int MaximumEntries = 1000;
@@ -36,10 +74,12 @@ internal sealed class DeviceBatteryHistory
         if (Entries.Count > MaximumEntries) Entries.RemoveRange(0, Entries.Count - MaximumEntries);
         return true;
     }
+
+    public BatteryHistoryEntry[] CurrentTrend() => BatteryTrend.Select(Entries);
 }
 
 // All file access and history mutation run on one worker. The tray/UI only
-// enqueues observations and reads the small, thread-safe last-charge snapshot.
+// enqueues observations and reads the small, thread-safe published snapshots.
 internal sealed class BatteryHistoryStore : IDisposable
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -54,6 +94,7 @@ internal sealed class BatteryHistoryStore : IDisposable
     private readonly Dictionary<string, DeviceBatteryHistory> _histories = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _dirty = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastCharges = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, BatteryHistoryEntry[]> _trends = new(StringComparer.OrdinalIgnoreCase);
     private readonly Task _worker;
 
     public BatteryHistoryStore(string directory, Action<string, Exception> logError)
@@ -63,10 +104,16 @@ internal sealed class BatteryHistoryStore : IDisposable
         _worker = Task.Run(ProcessAsync);
     }
 
-    public event Action? LastChargeChanged;
+    // Raised on the worker whenever a device's last charge or trend snapshot changes.
+    public event Action? Changed;
 
     public DateTimeOffset? GetLastChargedAt(string name) =>
         _lastCharges.TryGetValue(name, out var timestamp) ? timestamp : null;
+
+    // Chronological readings of the current discharge or charge; empty until
+    // a device has a usable reading and null before its history is loaded.
+    public BatteryHistoryEntry[]? GetTrend(string name) =>
+        _trends.TryGetValue(name, out var trend) ? trend : null;
 
     public void Load(string name) => _commands.Writer.TryWrite(new HistoryCommand(name));
 
@@ -100,7 +147,7 @@ internal sealed class BatteryHistoryStore : IDisposable
                 var history = await LoadAsync(command.Name).ConfigureAwait(false);
                 if (command.Percentage is int percentage && history.Record(percentage, command.ObservedAt))
                     _dirty.Add(command.Name);
-                PublishLastCharge(history);
+                Publish(history);
                 if (_dirty.Contains(command.Name)) await SaveAsync(history).ConfigureAwait(false);
             }
             catch (Exception error)
@@ -144,11 +191,23 @@ internal sealed class BatteryHistoryStore : IDisposable
         return history;
     }
 
-    private void PublishLastCharge(DeviceBatteryHistory history)
+    private void Publish(DeviceBatteryHistory history)
     {
-        if (history.LastChargedAt is not DateTimeOffset timestamp || GetLastChargedAt(history.DeviceName) == timestamp) return;
-        _lastCharges[history.DeviceName] = timestamp;
-        LastChargeChanged?.Invoke();
+        bool changed = false;
+        if (history.LastChargedAt is DateTimeOffset timestamp && GetLastChargedAt(history.DeviceName) != timestamp)
+        {
+            _lastCharges[history.DeviceName] = timestamp;
+            changed = true;
+        }
+        var trend = history.CurrentTrend();
+        if (GetTrend(history.DeviceName) is not { } previous || !previous.SequenceEqual(trend))
+        {
+            // Replaced only on change, so an unchanged snapshot keeps its identity
+            // and the dialog can skip repeated status messages.
+            _trends[history.DeviceName] = trend;
+            changed = true;
+        }
+        if (changed) Changed?.Invoke();
     }
 
     private async Task SaveAsync(DeviceBatteryHistory history)

@@ -177,4 +177,4 @@ UpdateLaunchArgumentsTests.Run(Check);
 await BatteryHistoryTests.RunAsync(Check);
 BatteryRefreshTests.Run(Check);
 EndpointRecoveryTests.Run(Check);
-Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, battery status, persistent tray registration, update downloads, battery history, battery recovery, and duplicate endpoint recovery.");
+Console.WriteLine($"Passed {checks} checks: tray visibility, connection transitions, stale reads, battery status, persistent tray registration, update downloads, battery history, battery trends, battery recovery, and duplicate endpoint recovery.");

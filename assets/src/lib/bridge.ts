@@ -3,11 +3,18 @@ export interface DeviceEntry {
   isConfigured: boolean;
 }
 
+export interface BatteryReading {
+  observedAt: string;
+  percentage: number;
+}
+
 export interface DeviceStatus {
   name: string;
   online: boolean;
   batteryLevel: number | null;
   lastChargedAt?: string | null;
+  // Chronological readings of the current discharge or charge.
+  trend?: BatteryReading[] | null;
 }
 
 export interface DeviceState {

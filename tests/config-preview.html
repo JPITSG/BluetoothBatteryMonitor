@@ -41,10 +41,14 @@ function mockHost(version) {
     { name: 'WH-1000XM5', isConfigured: true },
     { name: 'Bluetooth speaker', isConfigured: false },
   ];
+  const hoursAgo = (hours, percentage) => ({ observedAt: new Date(Date.now() - hours * 3600e3).toISOString(), percentage });
   const deviceStatuses = [
-    { name: 'MX Master 3S', online: true, batteryLevel: 67, lastChargedAt: chargeAt(2, 10, 42) },
-    { name: 'MX Keys', online: true, batteryLevel: 88, lastChargedAt: null },
-    { name: 'WH-1000XM5', online: false, batteryLevel: null, lastChargedAt: chargeAt(5, 18, 15) },
+    { name: 'MX Master 3S', online: true, batteryLevel: 67, lastChargedAt: chargeAt(2, 10, 42),
+      trend: [hoursAgo(52, 100), hoursAgo(40, 95), hoursAgo(31, 90), hoursAgo(24, 85), hoursAgo(18, 80), hoursAgo(9, 75), hoursAgo(4, 70), hoursAgo(1, 67)] },
+    { name: 'MX Keys', online: true, batteryLevel: 88, lastChargedAt: null,
+      trend: [hoursAgo(1.4, 62), hoursAgo(1.1, 70), hoursAgo(0.8, 78), hoursAgo(0.4, 84), hoursAgo(0.1, 88)] },
+    { name: 'WH-1000XM5', online: false, batteryLevel: null, lastChargedAt: chargeAt(5, 18, 15),
+      trend: [hoursAgo(120, 100), hoursAgo(96, 90), hoursAgo(80, 70), hoursAgo(60, 60), hoursAgo(50, 40)] },
   ];
   const send = data => listeners.forEach(listener => listener({ data }));
   const update = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: version };

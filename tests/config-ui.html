@@ -38,6 +38,7 @@ function mockHost() {
     { name: 'Headphones', isConfigured: true },
     { name: 'Keyboard', isConfigured: false },
     { name: 'Mouse', isConfigured: true },
+    { name: 'Earbuds', isConfigured: false },
   ];
   const deviceStatuses = [
     { name: 'Headphones', online: false, batteryLevel: null },
@@ -78,18 +79,22 @@ try {
   await paint();
   check(!!button('Update') && doc.body.textContent.includes('Refreshing devices'), 'Footer and saved devices are usable before discovery finishes.');
   check(doc.querySelector('section h2').textContent === 'Monitored', 'The device card is titled Monitored.');
-  check(deviceOrder() === 'Headphones|Mouse|Keyboard', 'Saved checked devices appear first when configuration opens.');
+  check(deviceOrder() === 'Mouse|Headphones|Earbuds|Keyboard', 'Saved checked devices appear first when configuration opens, connected ones leading, then alphabetical.');
   checkbox('Keyboard').focus();
   checkbox('Keyboard').click();
-  await wait(() => deviceOrder() === 'Headphones|Keyboard|Mouse');
+  await wait(() => deviceOrder() === 'Mouse|Headphones|Keyboard|Earbuds');
   check(checkbox('Keyboard').checked && doc.activeElement === checkbox('Keyboard'), 'Checking a device moves it into the top group and keeps keyboard focus.');
   checkbox('Keyboard').click();
-  await wait(() => deviceOrder() === 'Headphones|Mouse|Keyboard');
+  await wait(() => deviceOrder() === 'Mouse|Headphones|Earbuds|Keyboard');
   check(!checkbox('Keyboard').checked, 'Unchecking a device moves it below the checked devices.');
   const statusOf = name => row(name)?.querySelector('span span')?.textContent.replace(/^ · /, '') ?? '';
   check(!doc.querySelector('dl') && row('Mouse').textContent.startsWith('Mouse · Connected · 67%'), 'Device status appears inline inside the checkbox card, without a duplicate device list.');
   check(statusOf('Mouse') === 'Connected · 67%' && statusOf('Headphones') === 'Disconnected', 'Initial monitored-device status shows percentages only when connected.');
   check(frame.contentWindow.getComputedStyle(row('Headphones').querySelector('span span')).color === 'rgb(220, 38, 38)', 'Disconnected status is red.');
+  const nameLine = name => row(name).querySelector('span').getBoundingClientRect();
+  check(['Mouse', 'Headphones', 'Keyboard'].every(name => checkbox(name).getBoundingClientRect().height === 16 && nameLine(name).height >= 16 &&
+    checkbox(name).getBoundingClientRect().top - nameLine(name).top === 1),
+    'Each checkbox is centred on the name line: 16px inside its 16px line box, lowered 1px for Segoe UI glyphs, regardless of extra lines.');
   check(!doc.querySelector('time') && ['Mouse', 'Headphones'].every(name => row(name).textContent.includes('Last charged · Collecting data')),
     'Monitored devices without charge evidence show Collecting data while connected or disconnected.');
   check(!row('Keyboard').textContent.includes('Collecting data'), 'Unmonitored devices do not claim to be collecting battery history.');
@@ -112,9 +117,60 @@ try {
   await wait(() => statusOf('Mouse') === 'Disconnected');
   check(statusOf('Headphones') === 'Connected · Battery unknown', 'An unknown battery is never fabricated as 0%.');
   check(checkbox('Mouse').checked, 'Live status changes preserve monitoring selections.');
+  check(deviceOrder() === 'Headphones|Mouse|Earbuds|Keyboard', 'Live status changes re-rank connected devices first within the checked group.');
   host.send({ type: 'deviceStatus', deviceStatuses: [{ name: 'Headphones', online: true, batteryLevel: 92 }, { name: 'Mouse', online: true, batteryLevel: 66 }] });
   await wait(() => statusOf('Mouse') === 'Connected · 66%');
   check(statusOf('Headphones') === 'Connected · 92%', 'Connection and battery changes appear live without reopening configuration.');
+  // Battery trend graphs beside each monitored device.
+  check(!doc.querySelector('section svg'), 'Monitored devices without battery history show no graph.');
+  const DAY = 864e5, HOUR = 36e5;
+  const now = Date.now();
+  const reading = (time, percentage) => ({ observedAt: Number.isFinite(time) ? new Date(time).toISOString() : time, percentage });
+  const chargeStart = Date.parse('2026-09-10T02:00:00Z');
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Headphones', online: false, batteryLevel: null, trend: [reading(chargeStart, 50), reading(chargeStart + 30 * 60e3, 60), reading(chargeStart + 90 * 60e3, 75)] },
+    { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(now - 5 * DAY, 100), reading(now - 4 * DAY, 90), reading(now - 3 * DAY, 0),
+      reading(now - 2 * DAY, 80), reading('invalid', 50), reading(now - DAY, 67)] },
+  ] });
+  await wait(() => doc.querySelectorAll('section svg').length === 2);
+  const graph = name => row(name).querySelector('svg');
+  const graphLabels = name => [...row(name).querySelectorAll('svg + div span')].map(span => span.textContent).join('|');
+  const format = (options, times) => times.map(time => new frame.contentWindow.Intl.DateTimeFormat(undefined, options).format(time)).join('|');
+  const dayLabels = times => format({ month: 'short', day: 'numeric' }, times);
+  const clockLabels = times => format({ hour: 'numeric', minute: '2-digit' }, times);
+  const hourLabels = times => format({ hour: 'numeric' }, times);
+  check(!graph('Keyboard') && graph('Mouse').getBoundingClientRect().left >= nameLine('Mouse').right &&
+    Math.abs(graph('Mouse').getBoundingClientRect().top - row('Mouse').getBoundingClientRect().top) < 1,
+    'Graphs sit to the right of monitored device text, level with the device name.');
+  check(graphLabels('Mouse') === dayLabels([now - 5 * DAY, now - 2.5 * DAY, now]), 'A multi-day discharge carries three dates from the peak to the present.');
+  check(graph('Mouse').querySelectorAll('path')[1].getAttribute('d') === 'M0.0 3.5 L27.2 5.6 L81.6 7.7 L108.8 10.4 L136.0 10.4',
+    'A connected level continues to the present on a fixed 0–100% scale; zero and malformed readings are skipped.');
+  check(graph('Mouse').querySelectorAll('path')[0].getAttribute('d').endsWith('L136.0 10.4 L136 24.5 L0 24.5 Z') &&
+    [...graph('Mouse').querySelectorAll('circle')].every(circle => circle.getAttribute('cx') === '136' && Number(circle.getAttribute('cy')).toFixed(1) === '10.4'),
+    'The area fill closes on the 0% baseline and the end marker sits on the current level.');
+  const description = name => graph(name).getAttribute('aria-label');
+  check(description('Mouse').startsWith('Discharging 100% → 67% since ') && description('Mouse').endsWith(' · about 6.6% per day') &&
+    graph('Mouse').parentElement.title === description('Mouse'), 'The discharge rate is described for tooltips and assistive technology.');
+  check(graphLabels('Headphones') === clockLabels([chargeStart, chargeStart + 45 * 60e3, chargeStart + 90 * 60e3]),
+    'A disconnected device ends at its last reading, with clock labels for a charge shorter than three hours.');
+  check(description('Headphones').startsWith('Charging 50% → 75% since ') && description('Headphones').endsWith(' · about 17% per hour'),
+    'Charging is described with its hourly rate.');
+  check(row('Headphones').textContent.startsWith('Headphones · Disconnected') && row('Headphones').querySelectorAll('svg + div span').length === 3,
+    'Graph labels do not disturb the device status text.');
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Headphones', online: false, batteryLevel: null, trend: [reading(chargeStart, 80), reading(chargeStart + 8 * HOUR, 60)] },
+    { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(now - 2 * HOUR, 67)] },
+  ] });
+  await wait(() => description('Mouse')?.startsWith('Steady at 67% since '));
+  check(graphLabels('Headphones') === hourLabels([chargeStart, chargeStart + 4 * HOUR, chargeStart + 8 * HOUR]), 'Spans under a day use hour labels.');
+  const steadyLabels = base => clockLabels([base - 2 * HOUR, base - HOUR, base]);
+  check([steadyLabels(now), steadyLabels(now + 60e3)].includes(graphLabels('Mouse')), 'A lone reading of a connected device extends level to the present.');
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Headphones', online: false, batteryLevel: null, trend: [reading(now - 2 * HOUR, 40)] },
+    { name: 'Mouse', online: true, batteryLevel: null, trend: [reading(now - 2 * HOUR, 67)] },
+  ] });
+  await wait(() => !doc.querySelector('section svg'));
+  check(!graph('Headphones') && !graph('Mouse'), 'A lone reading is not drawn while disconnected or while the current level is unknown.');
   host.send({ type: 'deviceStatus', deviceStatuses: [] });
   await wait(() => statusOf('Mouse') === '');
   check(row('Mouse').textContent === 'Mouse', 'An unmonitored device is not assigned a fabricated connection state.');

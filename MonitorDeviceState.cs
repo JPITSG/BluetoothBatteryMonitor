@@ -78,7 +78,10 @@ internal class MonitorDeviceState
     }
 }
 
-internal readonly record struct DeviceStatus(string Name, bool Online, int? BatteryLevel, DateTimeOffset? LastChargedAt = null);
+// Trend is the published history snapshot; its identity only changes with
+// its contents, so the record's default equality still detects changes.
+internal readonly record struct DeviceStatus(string Name, bool Online, int? BatteryLevel, DateTimeOffset? LastChargedAt = null,
+    BatteryHistoryEntry[]? Trend = null);
 
 internal readonly record struct TrayDevice(string Name, bool Connected, bool Visible);
 
