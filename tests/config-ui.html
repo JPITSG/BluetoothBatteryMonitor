@@ -72,9 +72,9 @@ try {
   const doc = frame.contentDocument;
   const host = frame.contentWindow.testHost;
   const button = text => [...doc.querySelectorAll('button')].find(button => button.textContent === text);
-  const row = name => [...doc.querySelectorAll('section label')].find(label => label.textContent === name || label.textContent.startsWith(`${name} ·`));
+  const row = name => doc.querySelector(`section [data-device="${name}"]`);
   const checkbox = name => row(name)?.querySelector('input');
-  const deviceOrder = () => [...doc.querySelectorAll('section label')].map(label => label.querySelector('span').firstChild.textContent).join('|');
+  const deviceOrder = () => [...doc.querySelectorAll('section [data-device]')].map(item => item.dataset.device).join('|');
   const paint = () => new Promise(resolve => frame.contentWindow.requestAnimationFrame(() => frame.contentWindow.requestAnimationFrame(resolve)));
   await paint();
   check(!!button('Update') && doc.body.textContent.includes('Refreshing devices'), 'Footer and saved devices are usable before discovery finishes.');
@@ -87,6 +87,12 @@ try {
   checkbox('Keyboard').click();
   await wait(() => deviceOrder() === 'Mouse|Headphones|Earbuds|Keyboard');
   check(!checkbox('Keyboard').checked, 'Unchecking a device moves it below the checked devices.');
+  row('Keyboard').querySelector('span').click();
+  row('Mouse').querySelector('span span').click();
+  row('Mouse').click();
+  await paint();
+  check(!checkbox('Keyboard').checked && checkbox('Mouse').checked && !doc.querySelector('section label') &&
+    checkbox('Mouse').getAttribute('aria-label') === 'Mouse', 'Only the checkbox toggles monitoring; the name and status are not click targets, and the checkbox is still named.');
   const statusOf = name => row(name)?.querySelector('span span')?.textContent.replace(/^ · /, '') ?? '';
   check(!doc.querySelector('dl') && row('Mouse').textContent.startsWith('Mouse · Connected · 67%'), 'Device status appears inline inside the checkbox card, without a duplicate device list.');
   check(statusOf('Mouse') === 'Connected · 67%' && statusOf('Headphones') === 'Disconnected', 'Initial monitored-device status shows percentages only when connected.');
@@ -157,6 +163,10 @@ try {
     'Charging is described with its hourly rate.');
   check(row('Headphones').textContent.startsWith('Headphones · Disconnected') && row('Headphones').querySelectorAll('svg + div span').length === 3,
     'Graph labels do not disturb the device status text.');
+  graph('Mouse').dispatchEvent(new frame.contentWindow.MouseEvent('click', { bubbles: true }));
+  graph('Mouse').parentElement.click();
+  await paint();
+  check(checkbox('Mouse').checked, 'Clicking a graph does not toggle monitoring.');
   host.send({ type: 'deviceStatus', deviceStatuses: [
     { name: 'Headphones', online: false, batteryLevel: null, trend: [reading(chargeStart, 80), reading(chargeStart + 8 * HOUR, 60)] },
     { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(now - 2 * HOUR, 67)] },

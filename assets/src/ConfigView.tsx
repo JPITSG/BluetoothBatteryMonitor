@@ -65,16 +65,17 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
             ) : visibleDevices.map((device) => {
               const status = statusByName.get(device.name.toLowerCase());
               return (
-                <label key={device.name} className="flex items-start gap-2 cursor-pointer select-none">
+                // Only the checkbox toggles monitoring; the name, status and graph are not click targets.
+                <div key={device.name} data-device={device.name} className="flex items-start gap-2">
                   {/* Segoe UI glyphs sit low in the 16px line box; 1px centres the box on the name. */}
-                  <Checkbox className="mt-px" checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
+                  <Checkbox className="mt-px" aria-label={device.name} checked={selected.has(device.name)} onChange={() => toggle(device.name)} />
                   <span className="min-w-0 flex-1 break-words leading-4">{device.name}{status && (
                     <span className={status.online ? "text-green-700" : "text-red-600"}>
                       {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
                   )}{status && <LastCharged timestamp={status.lastChargedAt} />}</span>
                   {status && <BatteryTrend readings={status.trend} online={status.online} batteryLevel={status.batteryLevel} now={now} />}
-                </label>
+                </div>
               );
             })}
           </div>
