@@ -13,7 +13,7 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 - Each device has a stable tray GUID so Explorer can retain its preferences across app restarts, updates, and connection changes. After upgrading from older icons, arrange the icons once; subsequent launches reuse those identities. Keep the executable at the same path.
 - Startup uses Windows battery properties and cached Bluetooth battery data for devices confirmed connected, then refreshes from the device
 - Automatic device connect/disconnect detection via DeviceWatcher with periodic state verification
-- Tray icons use the taskbar's current DPI and original artwork at the matching size. After RDP connect/disconnect, local unlock, display changes, or an Explorer restart, refreshes continue for 30 seconds while Windows restores the taskbar. Later DPI changes are detected automatically.
+- Tray icons use the taskbar's current DPI and original artwork at the matching size. After RDP connect/disconnect, local unlock, display changes, or an Explorer restart, refreshes continue for 30 seconds while Windows restores the taskbar. Recovery recreates the shell registrations with the same device GUIDs and repaints their tray areas to clear Explorer's blurred RDP image cache without requiring a mouse hover, even when the DPI is unchanged. Hidden icons recover when next shown. Later DPI changes are detected automatically.
 - Single-instance enforcement
 
 ## Getting Started

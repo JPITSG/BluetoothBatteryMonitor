@@ -36,6 +36,7 @@ internal sealed class TrayIconRegistration
     private readonly Guid _identity;
     private readonly Func<TrayCommand, TrayIconData, bool> _send;
     private bool _registered;
+    private bool _recreatePending;
     public bool Version4 { get; private set; }
 
     public TrayIconRegistration(Guid identity, Func<TrayCommand, TrayIconData, bool> send)
@@ -52,6 +53,16 @@ internal sealed class TrayIconRegistration
 
     public bool Update(IntPtr window, IntPtr icon, string text, bool visible)
     {
+        // Explorer can retain a resampled image after RDP -> console even
+        // when NIM_MODIFY receives a fresh, correctly sized HICON. A new
+        // registration clears that cached image; keep the published GUID.
+        // Defer hidden icons until they are actually shown again.
+        if (_recreatePending && _registered && visible && icon != IntPtr.Zero)
+        {
+            if (!_send(TrayCommand.Delete, Identify(window))) return false;
+            _registered = false;
+            Version4 = false;
+        }
         if (!_registered && (!visible || icon == IntPtr.Zero)) return true;
         var data = Identify(window);
         data.Flags |= TrayFlags.Message | TrayFlags.Icon | TrayFlags.Tip | TrayFlags.State | TrayFlags.ShowTip;
@@ -63,18 +74,21 @@ internal sealed class TrayIconRegistration
         if (_registered) return _send(TrayCommand.Modify, data);
         if (!_send(TrayCommand.Add, data)) return false;
         _registered = true;
+        _recreatePending = false;
         var version = Identify(window);
         version.Version = 4; // NOTIFYICON_VERSION_4
         Version4 = _send(TrayCommand.SetVersion, version);
         return true;
     }
 
-    public void ExplorerRestarted() { _registered = false; Version4 = false; }
+    public void RequestRecreation() => _recreatePending = true;
+    public void ExplorerRestarted() { _registered = false; _recreatePending = false; Version4 = false; }
     public void ReturnFocus(IntPtr window) { if (_registered) _send(TrayCommand.SetFocus, Identify(window)); }
     public void Remove(IntPtr window)
     {
         if (_registered) _send(TrayCommand.Delete, Identify(window));
         _registered = false;
+        _recreatePending = false;
         Version4 = false;
     }
 }

@@ -58,10 +58,74 @@ internal static class TrayIconRefreshTests
         check(commands[^1].Command == TrayCommand.Modify && commands[^1].Data.Icon == new IntPtr(102),
             "The new local icon is submitted even if battery level and tooltip are unchanged.");
         check(commands.Count(c => c.Command == TrayCommand.Add) == 1 && commands.All(c => c.Command != TrayCommand.Delete),
-            "DPI recovery preserves the existing shell registration and tray order.");
+            "Routine artwork changes preserve the existing shell registration.");
         check(commands.All(c => c.Data.Identity == identity), "RDP recovery preserves the device's stable tray GUID.");
         registration.Update(window, new IntPtr(103), "Disconnected", false);
         check(commands[^1].Data.Icon == new IntPtr(103) && commands[^1].Data.State == 1,
             "Refreshing an offline icon does not make it visible.");
+
+        registration.RequestRecreation();
+        int before = commands.Count;
+        check(registration.Update(window, new IntPtr(104), "Disconnected", false), "Hidden icon recovery remains successful.");
+        check(commands.Skip(before).All(c => c.Command == TrayCommand.Modify) && commands[^1].Data.State == 1,
+            "Hidden icons defer cache recreation until shown, without flashing in the tray.");
+        before = commands.Count;
+        check(registration.Update(window, new IntPtr(105), "Battery: 60%", true), "A recovered device can show its new artwork.");
+        check(commands.Skip(before).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Delete, TrayCommand.Add, TrayCommand.SetVersion }),
+            "Showing an icon after RDP recovery discards Explorer's cached image before registering the replacement.");
+        check(commands[^2].Data.Icon == new IntPtr(105) && commands[^2].Data.Tip == "Battery: 60%" && commands[^2].Data.State == 0,
+            "The replacement uses the latest HICON, battery tooltip, and visible state.");
+        check(registration.Version4, "Recreated icons retain modern mouse and keyboard callbacks.");
+
+        registration.RequestRecreation();
+        registration.RequestRecreation();
+        before = commands.Count;
+        registration.Update(window, new IntPtr(106), "Battery: 60%", true);
+        check(commands.Skip(before).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Delete, TrayCommand.Add, TrayCommand.SetVersion }),
+            "Same-DPI recovery clears the shell cache, and duplicate requests coalesce into one recreation.");
+        check(commands.All(c => c.Data.Identity == identity && c.Data.Flags.HasFlag(TrayFlags.Guid)),
+            "Deleting and re-adding a degraded icon must keep the published device GUID.");
+        before = commands.Count;
+        registration.Update(window, new IntPtr(106), "Battery: 60% Updated: 1s", true);
+        check(commands.Skip(before).All(c => c.Command == TrayCommand.Modify), "Routine tooltip updates do not keep recreating icons.");
+
+        bool failDelete = false, failAdd = false;
+        var retries = new List<TrayCommand>();
+        var recovering = new TrayIconRegistration(identity, (command, _) =>
+        {
+            retries.Add(command);
+            return !(command == TrayCommand.Delete && failDelete || command == TrayCommand.Add && failAdd);
+        });
+        recovering.Update(window, new IntPtr(200), "Mouse", true);
+        recovering.RequestRecreation();
+        failDelete = true;
+        before = retries.Count;
+        check(!recovering.Update(window, new IntPtr(201), "Mouse", true), "A failed recovery delete requests another shell attempt.");
+        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Delete }) && recovering.Version4,
+            "A failed delete must not add a duplicate or discard the current callback state.");
+        failDelete = false;
+        failAdd = true;
+        before = retries.Count;
+        check(!recovering.Update(window, new IntPtr(202), "Mouse", true) && !recovering.Version4,
+            "A failed replacement add remains retryable after the old registration is removed.");
+        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Delete, TrayCommand.Add }),
+            "A failed replacement does not claim success or set its callback version.");
+        failAdd = false;
+        before = retries.Count;
+        check(recovering.Update(window, new IntPtr(203), "Mouse", true), "Recovery retries the replacement when Explorer becomes ready.");
+        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }),
+            "Retrying a failed add does not delete an already-removed registration again.");
+
+        recovering.RequestRecreation();
+        recovering.ExplorerRestarted();
+        before = retries.Count;
+        recovering.Update(window, new IntPtr(204), "Mouse", true);
+        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }),
+            "An Explorer restart supersedes pending recreation without deleting from the new shell.");
+        recovering.Remove(window);
+        recovering.RequestRecreation();
+        before = retries.Count;
+        check(recovering.Update(window, new IntPtr(205), "Disconnected", false) && retries.Count == before,
+            "Recovery never registers an initially hidden icon.");
     }
 }
