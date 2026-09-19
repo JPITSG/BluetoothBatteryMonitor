@@ -13,7 +13,7 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 - Each device has a stable tray GUID so Explorer can retain its preferences across app restarts, updates, and connection changes. After upgrading from older icons, arrange the icons once; subsequent launches reuse those identities. Keep the executable at the same path.
 - Startup uses Windows battery properties and cached Bluetooth battery data for devices confirmed connected, then refreshes from the device
 - Automatic device connect/disconnect detection via DeviceWatcher with periodic state verification
-- DPI-aware with icon refresh on display/session changes (including RDP reconnect)
+- Tray icons use the taskbar's current DPI and original artwork at the matching size. After RDP connect/disconnect, local unlock, display changes, or an Explorer restart, refreshes continue for 30 seconds while Windows restores the taskbar. Later DPI changes are detected automatically.
 - Single-instance enforcement
 
 ## Getting Started
@@ -108,6 +108,14 @@ WebView host to check immediate update/cancel feedback, delayed device discovery
 selection preservation, live download speed, per-update reopening, checkbox alignment,
 battery trend graphs, and scrolling.
 Native WebView2 startup and the installer handoff still require Windows verification.
+
+On Windows, run `dotnet run --project tests/windows/TrayIconRendering.Tests.csproj -c Release`
+to check native icon dimensions, transparency, original pixels after DPI round trips,
+and icon-handle cleanup. The cross-platform `make test` suite checks delayed RDP/local
+transitions, refresh retries, and preservation of tray identity and visibility.
+For end-to-end verification, connect with `mstsc` at a different display scale, then
+sign in locally and check that both battery icons return to their original sharpness.
+Repeat with the same scale on both sessions to cover taskbar refreshes without a DPI change.
 
 ## License
 

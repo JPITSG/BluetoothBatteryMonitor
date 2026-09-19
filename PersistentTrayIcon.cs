@@ -18,6 +18,7 @@ internal sealed class PersistentTrayIcon : NativeWindow, IDisposable
     private bool _disposed;
     private ContextMenuStrip? _menu;
     public event EventHandler? DoubleClick;
+    public event EventHandler? ExplorerRestarted;
 
     public PersistentTrayIcon(Guid identity)
     {
@@ -68,6 +69,7 @@ internal sealed class PersistentTrayIcon : NativeWindow, IDisposable
         {
             _registration.ExplorerRestarted();
             Synchronize();
+            ExplorerRestarted?.Invoke(this, EventArgs.Empty);
         }
         else if (message.Msg == TrayIconRegistration.CallbackMessage && !_disposed)
         {

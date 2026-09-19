@@ -44,10 +44,8 @@ namespace BluetoothBatteryMonitor
         // Cache for HFP device instance IDs (device name -> instance ID)
         private readonly Dictionary<string, string> _hfpInstanceIdCache = new(StringComparer.OrdinalIgnoreCase);
 
-        private int _lastScreenWidth;
-        private int _lastScreenHeight;
-        private float _lastDpiX;
-        private float _lastDpiY;
+        private readonly TrayIconRefreshState _trayIconRefresh = new();
+        private Size _trayIconSize;
         
         private Icon? _iconFull;
         private Icon? _iconGood;
@@ -78,16 +76,6 @@ namespace BluetoothBatteryMonitor
         private static readonly string[] RequestedDeviceProperties =
             ConnectionProperties.Append("System.Devices.BatteryLife").ToArray();
 
-        // P/Invoke for proper DPI detection
-        [DllImport("user32.dll")]
-        private static extern IntPtr GetDC(IntPtr hwnd);
-        [DllImport("user32.dll")]
-        private static extern int ReleaseDC(IntPtr hwnd, IntPtr hdc);
-        [DllImport("gdi32.dll")]
-        private static extern int GetDeviceCaps(IntPtr hdc, int nIndex);
-        private const int LOGPIXELSX = 88;
-        private const int LOGPIXELSY = 90;
-        
         // CfgMgr32 API for reading PnP device properties (like PowerShell's Get-PnpDeviceProperty)
         [DllImport("CfgMgr32.dll", CharSet = CharSet.Unicode)]
         private static extern int CM_Locate_DevNodeW(out int pdnDevInst, string pDeviceID, int ulFlags);
@@ -125,6 +113,7 @@ namespace BluetoothBatteryMonitor
         // For detecting session changes (RDP connect/disconnect)
         private const int WM_WTSSESSION_CHANGE = 0x02B1;
         private const int WTS_CONSOLE_CONNECT = 0x1;
+        private const int WTS_REMOTE_CONNECT = 0x3;
         private const int WTS_REMOTE_DISCONNECT = 0x4;
         private const int WTS_SESSION_UNLOCK = 0x8;
         
@@ -162,11 +151,11 @@ namespace BluetoothBatteryMonitor
             _deviceMenuItems = new Dictionary<string, ToolStripItem>();
             _deviceLastUpdateMenuItems = new Dictionary<string, ToolStripItem>();
 
-            CaptureCurrentDisplaySettings();
             SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
             SystemEvents.SessionSwitch += OnSessionSwitch;
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
+            _trayIconSize = TrayIconRenderer.GetTaskbarIconSize() ?? new Size(16, 16);
             LoadBatteryIcons();
             InitializeDevices();
             bool shouldShowConfigurationOnLaunch = forceConfiguration || (configureIfEmpty && _devices.Count == 0);
@@ -177,6 +166,7 @@ namespace BluetoothBatteryMonitor
                 Interval = (int)_uiRefreshInterval.TotalMilliseconds
             };
             _uiRefreshTimer.Tick += OnUiRefreshTimerTick;
+            _trayIconRefresh.Request(Environment.TickCount64);
             _uiRefreshTimer.Start();
 
             _batteryRecoveryTimer = new System.Windows.Forms.Timer { Interval = 3000 };
@@ -250,17 +240,14 @@ namespace BluetoothBatteryMonitor
                     break;
                     
                 case SessionSwitchReason.RemoteConnect:
-                    _ = Task.Run(async () =>
-                    {
-                        await Task.Delay(500);
-                        CaptureCurrentDisplaySettings();
-                    });
+                    RequestTrayIconRefresh();
                     break;
             }
         }
 
         internal void OnWtsSessionChange(int reason)
         {
+            if (reason == WTS_REMOTE_CONNECT) RequestTrayIconRefresh();
             if (reason == WTS_CONSOLE_CONNECT || reason == WTS_REMOTE_DISCONNECT || reason == WTS_SESSION_UNLOCK)
             {
                 ScheduleSessionReconnect();
@@ -269,6 +256,9 @@ namespace BluetoothBatteryMonitor
 
         private void ScheduleSessionReconnect()
         {
+            // Icon recovery must not wait for Bluetooth I/O or be suppressed
+            // by an already-running battery recovery after another event.
+            RequestTrayIconRefresh();
             if (_disposeCts.IsCancellationRequested || Interlocked.Exchange(ref _sessionRefreshPending, 1) == 1)
                 return;
 
@@ -290,8 +280,6 @@ namespace BluetoothBatteryMonitor
         {
             await RunOnUiAsync(() =>
             {
-                RefreshTrayIconsForDpiChange();
-                CaptureCurrentDisplaySettings();
                 RestartDeviceWatchers();
                 StartBatteryRecovery();
                 return Task.CompletedTask;
@@ -299,7 +287,7 @@ namespace BluetoothBatteryMonitor
             await VerifyDeviceStatesAsync();
         }
 
-        private void RefreshTrayIconsForDpiChange()
+        private void RefreshTrayIconsForDpiChange(Size size)
         {
             var oldIconFull = _iconFull;
             var oldIconGood = _iconGood;
@@ -307,6 +295,7 @@ namespace BluetoothBatteryMonitor
             var oldIconLow = _iconLow;
             var oldIconEmpty = _iconEmpty;
 
+            _trayIconSize = size;
             LoadBatteryIcons();
 
             foreach (var deviceName in _devices.Keys.ToArray())
@@ -370,97 +359,45 @@ namespace BluetoothBatteryMonitor
         #endregion
 
         #region Display Settings Management
-        private void CaptureCurrentDisplaySettings()
+        private void RequestTrayIconRefresh()
         {
-            try
+            if (_disposeCts.IsCancellationRequested) return;
+            _syncContext.Post(_ =>
             {
-                _lastScreenWidth = Screen.PrimaryScreen?.Bounds.Width ?? 0;
-                _lastScreenHeight = Screen.PrimaryScreen?.Bounds.Height ?? 0;
-
-                IntPtr hdc = GetDC(IntPtr.Zero);
-                _lastDpiX = GetDeviceCaps(hdc, LOGPIXELSX);
-                _lastDpiY = GetDeviceCaps(hdc, LOGPIXELSY);
-                ReleaseDC(IntPtr.Zero, hdc);
-            }
-            catch { }
+                if (!_disposeCts.IsCancellationRequested)
+                    _trayIconRefresh.Request(Environment.TickCount64);
+            }, null);
         }
 
-        private bool HasDisplaySettingsChanged()
-        {
-            try
-            {
-                int currentWidth = Screen.PrimaryScreen?.Bounds.Width ?? 0;
-                int currentHeight = Screen.PrimaryScreen?.Bounds.Height ?? 0;
+        private void OnTrayExplorerRestarted(object? sender, EventArgs e) => RequestTrayIconRefresh();
 
-                IntPtr hdc = GetDC(IntPtr.Zero);
-                float currentDpiX = GetDeviceCaps(hdc, LOGPIXELSX);
-                float currentDpiY = GetDeviceCaps(hdc, LOGPIXELSY);
-                ReleaseDC(IntPtr.Zero, hdc);
-
-                return currentWidth != _lastScreenWidth ||
-                       currentHeight != _lastScreenHeight ||
-                       Math.Abs(currentDpiX - _lastDpiX) > 0.1f ||
-                       Math.Abs(currentDpiY - _lastDpiY) > 0.1f;
-            }
-            catch
-            {
-                return false;
-            }
-        }
-
-        private void OnDisplaySettingsChanged(object? sender, EventArgs e)
-        {
-            _ = Task.Run(async () =>
-            {
-                await Task.Delay(1000);
-                if (HasDisplaySettingsChanged())
-                {
-                    await HandleSessionReconnectAsync();
-                }
-            });
-        }
+        private void OnDisplaySettingsChanged(object? sender, EventArgs e) => RequestTrayIconRefresh();
         #endregion
 
         #region Icon Management
         private void LoadBatteryIcons()
         {
-            try
-            {
-                var assembly = System.Reflection.Assembly.GetExecutingAssembly();
-                _iconFull = LoadIconFromResource(assembly, "icon_battery_full.ico") ?? CreateFallbackIcon();
-                _iconGood = LoadIconFromResource(assembly, "icon_battery_good.ico") ?? CreateFallbackIcon();
-                _iconMedium = LoadIconFromResource(assembly, "icon_battery_medium.ico") ?? CreateFallbackIcon();
-                _iconLow = LoadIconFromResource(assembly, "icon_battery_low.ico") ?? CreateFallbackIcon();
-                _iconEmpty = LoadIconFromResource(assembly, "icon_battery_empty.ico") ?? CreateFallbackIcon();
-            }
-            catch
-            {
-                _iconEmpty = CreateFallbackIcon();
-            }
+            _iconFull = LoadBatteryIcon("icon_battery_full.ico");
+            _iconGood = LoadBatteryIcon("icon_battery_good.ico");
+            _iconMedium = LoadBatteryIcon("icon_battery_medium.ico");
+            _iconLow = LoadBatteryIcon("icon_battery_low.ico");
+            _iconEmpty = LoadBatteryIcon("icon_battery_empty.ico");
         }
 
-        private static Icon? LoadIconFromResource(System.Reflection.Assembly assembly, string resourceName)
+        private Icon LoadBatteryIcon(string resourceName)
         {
             try
             {
-                var stream = assembly.GetManifestResourceStream($"BluetoothBatteryMonitor.{resourceName}")
-                          ?? assembly.GetManifestResourceStream(resourceName);
-                if (stream != null)
-                    return new Icon(stream);
+                return TrayIconRenderer.Load(System.Reflection.Assembly.GetExecutingAssembly(), resourceName, _trayIconSize);
             }
-            catch { }
-            return null;
+            catch (Exception ex)
+            {
+                LogMonitorError($"Load tray icon '{resourceName}'", ex);
+                return CreateFallbackIcon();
+            }
         }
 
-        private Icon CreateFallbackIcon()
-        {
-            using var bitmap = new Bitmap(16, 16);
-            using var g = Graphics.FromImage(bitmap);
-            g.Clear(Color.Gray);
-            using var pen = new Pen(Color.Red, 2);
-            g.DrawRectangle(pen, 0, 0, 15, 15);
-            return Icon.FromHandle(bitmap.GetHicon());
-        }
+        private Icon CreateFallbackIcon() => TrayIconRenderer.CreateFallback(_trayIconSize);
 
         private Icon GetBatteryIcon(int? percentage)
         {
@@ -530,6 +467,7 @@ namespace BluetoothBatteryMonitor
                 };
 
                 notifyIcon.DoubleClick += OnOpenBluetoothSettings;
+                notifyIcon.ExplorerRestarted += OnTrayExplorerRestarted;
                 notifyIcon.ContextMenuStrip = CreateContextMenuForDevice(deviceName, deviceInfo);
 
                 _trayIcons[deviceName] = notifyIcon;
@@ -551,6 +489,7 @@ namespace BluetoothBatteryMonitor
                 menu.Items.Add("Exit", null, OnExitClick);
                 _accessIcon = new PersistentTrayIcon(TrayIconIdentity.Configuration) { Text = "Bluetooth Battery Monitor\nNo devices configured", ContextMenuStrip = menu };
                 _accessIcon.DoubleClick += OnConfigureClick;
+                _accessIcon.ExplorerRestarted += OnTrayExplorerRestarted;
             }
             _accessIcon.Icon = GetBatteryIcon(null);
             // Show replacements first, so changing connections never removes
@@ -1385,6 +1324,10 @@ namespace BluetoothBatteryMonitor
             if (_disposeCts.IsCancellationRequested)
                 return;
 
+            var size = TrayIconRenderer.GetTaskbarIconSize();
+            if (_trayIconRefresh.ShouldRefresh(size, Environment.TickCount64))
+                RefreshTrayIconsForDpiChange(size!.Value);
+
             foreach (var deviceName in _devices.Keys.ToArray())
             {
                 if (!_devices.TryGetValue(deviceName, out var deviceInfo))
@@ -1782,6 +1725,10 @@ namespace BluetoothBatteryMonitor
                 if (m.Msg == WM_WTSSESSION_CHANGE)
                 {
                     _parent.OnWtsSessionChange(m.WParam.ToInt32());
+                }
+                else if (m.Msg is 0x02E0 or 0x007E or 0x001A) // WM_DPICHANGED / WM_DISPLAYCHANGE / WM_SETTINGCHANGE
+                {
+                    _parent.RequestTrayIconRefresh();
                 }
                 base.WndProc(ref m);
             }
