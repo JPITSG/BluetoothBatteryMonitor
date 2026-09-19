@@ -64,68 +64,92 @@ internal static class TrayIconRefreshTests
         check(commands[^1].Data.Icon == new IntPtr(103) && commands[^1].Data.State == 1,
             "Refreshing an offline icon does not make it visible.");
 
-        registration.RequestRecreation();
-        int before = commands.Count;
-        check(registration.Update(window, new IntPtr(104), "Disconnected", false), "Hidden icon recovery remains successful.");
-        check(commands.Skip(before).All(c => c.Command == TrayCommand.Modify) && commands[^1].Data.State == 1,
-            "Hidden icons defer cache recreation until shown, without flashing in the tray.");
-        before = commands.Count;
-        check(registration.Update(window, new IntPtr(105), "Battery: 60%", true), "A recovered device can show its new artwork.");
-        check(commands.Skip(before).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Delete, TrayCommand.Add, TrayCommand.SetVersion }),
-            "Showing an icon after RDP recovery discards Explorer's cached image before registering the replacement.");
-        check(commands[^2].Data.Icon == new IntPtr(105) && commands[^2].Data.Tip == "Battery: 60%" && commands[^2].Data.State == 0,
-            "The replacement uses the latest HICON, battery tooltip, and visible state.");
-        check(registration.Version4, "Recreated icons retain modern mouse and keyboard callbacks.");
-
-        registration.RequestRecreation();
-        registration.RequestRecreation();
-        before = commands.Count;
-        registration.Update(window, new IntPtr(106), "Battery: 60%", true);
-        check(commands.Skip(before).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Delete, TrayCommand.Add, TrayCommand.SetVersion }),
-            "Same-DPI recovery clears the shell cache, and duplicate requests coalesce into one recreation.");
-        check(commands.All(c => c.Data.Identity == identity && c.Data.Flags.HasFlag(TrayFlags.Guid)),
-            "Deleting and re-adding a degraded icon must keep the published device GUID.");
-        before = commands.Count;
-        registration.Update(window, new IntPtr(106), "Battery: 60% Updated: 1s", true);
-        check(commands.Skip(before).All(c => c.Command == TrayCommand.Modify), "Routine tooltip updates do not keep recreating icons.");
-
-        bool failDelete = false, failAdd = false;
-        var retries = new List<TrayCommand>();
-        var recovering = new TrayIconRegistration(identity, (command, _) =>
+        // Explorer can announce a rebuilt taskbar while the shell still holds
+        // this icon. NIM_ADD can then never succeed, and until that was handled
+        // the icon kept the artwork published for the previous session's DPI,
+        // which the shell rescaled into the local tray and drew blurred.
+        var held = new List<(TrayCommand Command, TrayIconData Data)>();
+        bool shellHoldsIcon = false;
+        var stale = new TrayIconRegistration(identity, (command, data) =>
         {
-            retries.Add(command);
-            return !(command == TrayCommand.Delete && failDelete || command == TrayCommand.Add && failAdd);
+            held.Add((command, data));
+            return command switch
+            {
+                TrayCommand.Add => !shellHoldsIcon,
+                TrayCommand.Modify => shellHoldsIcon,
+                _ => true
+            };
         });
-        recovering.Update(window, new IntPtr(200), "Mouse", true);
-        recovering.RequestRecreation();
-        failDelete = true;
-        before = retries.Count;
-        check(!recovering.Update(window, new IntPtr(201), "Mouse", true), "A failed recovery delete requests another shell attempt.");
-        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Delete }) && recovering.Version4,
-            "A failed delete must not add a duplicate or discard the current callback state.");
-        failDelete = false;
-        failAdd = true;
-        before = retries.Count;
-        check(!recovering.Update(window, new IntPtr(202), "Mouse", true) && !recovering.Version4,
-            "A failed replacement add remains retryable after the old registration is removed.");
-        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Delete, TrayCommand.Add }),
-            "A failed replacement does not claim success or set its callback version.");
-        failAdd = false;
-        before = retries.Count;
-        check(recovering.Update(window, new IntPtr(203), "Mouse", true), "Recovery retries the replacement when Explorer becomes ready.");
-        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }),
-            "Retrying a failed add does not delete an already-removed registration again.");
+        check(stale.Update(window, new IntPtr(300), "Battery: 60%", true), "A first registration adds the icon.");
+        shellHoldsIcon = true;
+        stale.ExplorerRestarted();
+        int at = held.Count;
+        check(stale.Update(window, new IntPtr(301), "Battery: 60%", true),
+            "A rebuilt taskbar that kept this icon must not block every later update.");
+        check(held.Skip(at).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.Modify, TrayCommand.SetVersion }),
+            "A rejected add adopts the registration the shell still holds.");
+        check(held[^2].Data.Icon == new IntPtr(301) && held[^2].Data.State == 0,
+            "Adopting a held registration publishes the current artwork at the local size.");
+        check(stale.Version4, "An adopted registration restores modern mouse and keyboard callbacks.");
+        at = held.Count;
+        check(stale.Update(window, new IntPtr(302), "Battery: 55%", true) &&
+            held.Skip(at).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Modify }),
+            "Later refreshes reuse the adopted registration instead of adding again.");
+        check(held.All(c => c.Command != TrayCommand.Delete),
+            "Recovery never deletes an icon, which would drop it from the user's tray order.");
 
-        recovering.RequestRecreation();
-        recovering.ExplorerRestarted();
-        before = retries.Count;
-        recovering.Update(window, new IntPtr(204), "Mouse", true);
-        check(retries.Skip(before).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }),
-            "An Explorer restart supersedes pending recreation without deleting from the new shell.");
-        recovering.Remove(window);
-        recovering.RequestRecreation();
-        before = retries.Count;
-        check(recovering.Update(window, new IntPtr(205), "Disconnected", false) && retries.Count == before,
-            "Recovery never registers an initially hidden icon.");
+        // The opposite stale state: the app believes it is still registered but
+        // the shell dropped the icon without broadcasting a taskbar restart.
+        at = held.Count;
+        shellHoldsIcon = false;
+        check(stale.Update(window, new IntPtr(303), "Battery: 55%", true),
+            "An icon the shell silently dropped is registered again.");
+        check(held.Skip(at).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Modify, TrayCommand.Add, TrayCommand.SetVersion }),
+            "A rejected modify falls back to adding the icon back.");
+        check(held[^2].Data.Icon == new IntPtr(303), "Re-adding a dropped icon publishes the current artwork.");
+
+        // Neither command can succeed while Explorer is mid-transition.
+        var offline = new List<TrayCommand>();
+        bool shellReady = false;
+        var waiting = new TrayIconRegistration(identity, (command, _) =>
+        {
+            offline.Add(command);
+            return shellReady;
+        });
+        check(!waiting.Update(window, new IntPtr(400), "Battery: 60%", true) && !waiting.Version4,
+            "An unreachable shell keeps the update retryable and claims no registration.");
+        check(offline.SequenceEqual(new[] { TrayCommand.Add, TrayCommand.Modify }),
+            "Both shell commands are attempted before reporting a failure.");
+        shellReady = true;
+        offline.Clear();
+        check(waiting.Update(window, new IntPtr(401), "Battery: 60%", true),
+            "Recovery succeeds once Explorer is ready again.");
+        check(offline.SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }),
+            "The retry publishes the latest artwork through a fresh registration.");
+
+        // Icons that have never been shown stay out of the tray entirely.
+        var hidden = new List<TrayCommand>();
+        var deferred = new TrayIconRegistration(identity, (command, _) => { hidden.Add(command); return true; });
+        check(deferred.Update(window, new IntPtr(500), "Disconnected", false) && hidden.Count == 0,
+            "A device that has never been connected is never registered.");
+        check(deferred.Update(window, IntPtr.Zero, "Battery: 60%", true) && hidden.Count == 0,
+            "An icon is never registered before its artwork is available.");
+
+        // Restart and shutdown keep addressing the same published identity.
+        var lifecycle = new List<(TrayCommand Command, TrayIconData Data)>();
+        var restarted = new TrayIconRegistration(identity, (command, data) => { lifecycle.Add((command, data)); return true; });
+        restarted.Update(window, new IntPtr(600), "Battery: 60%", true);
+        restarted.ExplorerRestarted();
+        at = lifecycle.Count;
+        restarted.Update(new IntPtr(11), new IntPtr(601), "Battery: 60%", true);
+        check(lifecycle.Skip(at).Select(c => c.Command).SequenceEqual(new[] { TrayCommand.Add, TrayCommand.SetVersion }),
+            "A genuine Explorer restart registers the icon on the new taskbar.");
+        restarted.Remove(new IntPtr(11));
+        check(lifecycle[^1].Command == TrayCommand.Delete, "Application shutdown removes the shell icon.");
+        at = lifecycle.Count;
+        check(restarted.Update(new IntPtr(11), new IntPtr(602), "Disconnected", false) && lifecycle.Count == at,
+            "A removed icon is not resurrected while it stays hidden.");
+        check(lifecycle.All(c => c.Data.Identity == identity && c.Data.Flags.HasFlag(TrayFlags.Guid)),
+            "Every shell command addresses the same stable device GUID.");
     }
 }

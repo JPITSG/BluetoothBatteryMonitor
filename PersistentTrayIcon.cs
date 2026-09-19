@@ -71,10 +71,11 @@ internal sealed class PersistentTrayIcon : NativeWindow, IDisposable
 
     private static bool Send(TrayCommand command, TrayIconData data) => Shell_NotifyIconW(command, ref data);
 
-    public void RefreshRegistration()
+    // Re-publish the current artwork and force Explorer to repaint it, even
+    // when the icon object itself is unchanged.
+    public void Refresh()
     {
         if (_disposed) return;
-        _registration.RequestRecreation();
         _repaintPending = true;
         Synchronize();
     }

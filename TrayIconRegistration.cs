@@ -36,7 +36,6 @@ internal sealed class TrayIconRegistration
     private readonly Guid _identity;
     private readonly Func<TrayCommand, TrayIconData, bool> _send;
     private bool _registered;
-    private bool _recreatePending;
     public bool Version4 { get; private set; }
 
     public TrayIconRegistration(Guid identity, Func<TrayCommand, TrayIconData, bool> send)
@@ -53,17 +52,9 @@ internal sealed class TrayIconRegistration
 
     public bool Update(IntPtr window, IntPtr icon, string text, bool visible)
     {
-        // Explorer can retain a resampled image after RDP -> console even
-        // when NIM_MODIFY receives a fresh, correctly sized HICON. A new
-        // registration clears that cached image; keep the published GUID.
-        // Defer hidden icons until they are actually shown again.
-        if (_recreatePending && _registered && visible && icon != IntPtr.Zero)
-        {
-            if (!_send(TrayCommand.Delete, Identify(window))) return false;
-            _registered = false;
-            Version4 = false;
-        }
+        // Defer icons that have never been shown until they are.
         if (!_registered && (!visible || icon == IntPtr.Zero)) return true;
+
         var data = Identify(window);
         data.Flags |= TrayFlags.Message | TrayFlags.Icon | TrayFlags.Tip | TrayFlags.State | TrayFlags.ShowTip;
         data.CallbackMessage = CallbackMessage;
@@ -71,24 +62,48 @@ internal sealed class TrayIconRegistration
         data.Tip = text.Length > 127 ? text[..127] : text;
         data.StateMask = 1; // NIS_HIDDEN
         data.State = visible ? 0u : 1u;
-        if (_registered) return _send(TrayCommand.Modify, data);
-        if (!_send(TrayCommand.Add, data)) return false;
+
+        // Explorer rebuilds its notification area during RDP and console
+        // transitions. That can leave the shell holding this GUID after the
+        // app was told to register again, or drop it without telling the app
+        // at all. NIM_ADD always fails against a registration the shell still
+        // holds, and NIM_MODIFY always fails once it has dropped one, so a
+        // single wrong guess would stop this icon from ever publishing again
+        // and the shell would keep drawing the image it last accepted - the
+        // previous session's size, rescaled and blurred. Try the opposite
+        // command before reporting a failure the retry timer cannot fix.
+        if (_registered)
+        {
+            if (Publish(TrayCommand.Modify, data, window)) return true;
+            _registered = false;
+            Version4 = false;
+            return Publish(TrayCommand.Add, data, window);
+        }
+
+        return Publish(TrayCommand.Add, data, window) || Publish(TrayCommand.Modify, data, window);
+    }
+
+    // A shell command that succeeds proves the icon is registered. Claim the
+    // registration only then, and (re-)apply the callback version whenever a
+    // new one is adopted so mouse and keyboard messages keep working.
+    private bool Publish(TrayCommand command, TrayIconData data, IntPtr window)
+    {
+        if (!_send(command, data)) return false;
+        bool adopted = !_registered;
         _registered = true;
-        _recreatePending = false;
+        if (!adopted && Version4) return true;
         var version = Identify(window);
         version.Version = 4; // NOTIFYICON_VERSION_4
         Version4 = _send(TrayCommand.SetVersion, version);
         return true;
     }
 
-    public void RequestRecreation() => _recreatePending = true;
-    public void ExplorerRestarted() { _registered = false; _recreatePending = false; Version4 = false; }
+    public void ExplorerRestarted() { _registered = false; Version4 = false; }
     public void ReturnFocus(IntPtr window) { if (_registered) _send(TrayCommand.SetFocus, Identify(window)); }
     public void Remove(IntPtr window)
     {
         if (_registered) _send(TrayCommand.Delete, Identify(window));
         _registered = false;
-        _recreatePending = false;
         Version4 = false;
     }
 }

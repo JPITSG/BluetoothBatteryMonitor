@@ -316,11 +316,11 @@ namespace BluetoothBatteryMonitor
             }
 
             RefreshTrayVisibility();
-            // Replacing the HICON alone does not clear Explorer's degraded
-            // RDP image cache. Re-register after session/display recovery,
-            // including same-DPI transitions, using the same stable GUIDs.
-            foreach (var icon in _trayIcons.Values) icon.RefreshRegistration();
-            _accessIcon?.RefreshRegistration();
+            // Publish the resized artwork again even where the icon object did
+            // not change, and repaint the tray so recovery does not wait for a
+            // hover. Registrations are kept so Explorer retains icon order.
+            foreach (var icon in _trayIcons.Values) icon.Refresh();
+            _accessIcon?.Refresh();
             try
             {
                 oldIconFull?.Dispose();
