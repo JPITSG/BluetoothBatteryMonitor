@@ -54,6 +54,16 @@ observed, not the exact time charging began or ended. Until a charge is detected
 the line shows **Last charged · Collecting data**. The last-charge timestamp
 survives restarts and log trimming.
 
+Connection changes are saved in the same file: when a monitored device connects
+or disconnects, as configuration shows it, and when monitoring stops because the
+app closes, the PC sleeps, shuts down or signs out, or the device stops being
+monitored. A change is saved once it has lasted **ten seconds** and is dated from
+when it began, so brief drop-outs are ignored, including the app's own
+reconnections after startup, wake, unlock or a configuration change. After a crash
+or power loss, a heartbeat saved every minute marks when monitoring stopped. Each
+file keeps the newest **4,000 changes**. Logs from earlier versions load unchanged;
+connections before this was recorded are unknown.
+
 Beside each monitored device, configuration draws a small graph of the current
 discharge or charge: the readings since the last charge ended (the peak) or since
 charging last began (the trough), whichever is nearer, on a fixed 0–100% scale
@@ -61,10 +71,20 @@ with three dates or times along the bottom. A move of at least five points
 against the current direction is a turning point; smaller reversals are treated
 as reporting noise, matching charge detection. While a device is connected with a
 known percentage, the line continues at that level to the present, because the
-next change would have been logged; a disconnected device's graph ends at its
-last reading. Hovering the graph shows the change, when it began, and the
-approximate rate per hour or per day. Devices with fewer than two usable readings
-show no graph. Zero readings are never plotted.
+next change would have been logged. Otherwise the line ends at the last reading,
+marked with a ring instead of a dot. Hovering the graph shows the change, when it
+began, and the approximate rate per hour or per day. Devices with fewer than two
+usable readings show no graph. Zero readings are never plotted.
+
+Time a device was offline is shaded **light red** behind the line: disconnected,
+or not monitored while the PC was asleep or off or the app was closed. App
+restarts shorter than two minutes are not shown. Each pixel column is shaded by
+how much of its time was offline, so long periods are solid bands while frequent
+short drop-outs blend into an even, lighter tint instead of a comb of slivers. A
+current disconnection extends the graph to the present. Hovering an offline period
+a few pixels wide or more shows when it happened and for how long, and the graph's
+tooltip adds how many times and how long the device was offline in total, and
+since when it has been disconnected.
 
 File operations run in the background; changed logs are replaced atomically and
 pending saves finish on normal exit or update. Duplicate readings, including
@@ -77,7 +97,8 @@ starting a fresh log. History stays on this PC and is not uploaded.
 For a dummy-data configuration preview, build the frontend and open
 `http://127.0.0.1:8782/tests/config-preview.html` using the local server described
 below. It uses the real built modal and simulated devices, without changing
-settings or writing any history.
+settings or writing any history. Add `?zoom=3` to the address to inspect the
+graphs up close.
 
 ## Prerequisites
 
@@ -96,7 +117,7 @@ settings or writing any history.
 ```bash
 make          # full build: frontend + .NET publish
 make clean    # remove all build artifacts
-make test     # connection, tray, update-download, battery-history, and trend regression checks
+make test     # connection, tray, update-download, battery-history, connection-history and trend checks
 ```
 
 Output: `release/BluetoothBatteryMonitor.exe`
@@ -106,7 +127,7 @@ serve the repository with `python3 -m http.server 8782 --bind 127.0.0.1`, and op
 `http://127.0.0.1:8782/tests/config-ui.html` in a browser. This uses a simulated
 WebView host to check immediate update/cancel feedback, delayed device discovery,
 selection preservation, live download percentage, per-update reopening, checkbox alignment,
-battery trend graphs, and scrolling.
+battery trend graphs with offline shading, and scrolling.
 Native WebView2 startup and the installer handoff still require Windows verification.
 
 On Windows, run `dotnet run --project tests/windows/TrayIconRendering.Tests.csproj -c Release`
@@ -123,7 +144,7 @@ Repeat with the same scale on both sessions to cover taskbar refreshes without a
 
 ## Updates
 
-Version: **1.0.26**.
+Version: **1.0.27**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

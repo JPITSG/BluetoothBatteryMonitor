@@ -74,7 +74,8 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
                       {status.online ? ` · Connected · ${status.batteryLevel === null ? "Battery unknown" : `${status.batteryLevel}%`}` : " · Disconnected"}
                     </span>
                   )}{status && <LastCharged timestamp={status.lastChargedAt} />}</span>
-                  {status && <BatteryTrend readings={status.trend} online={status.online} batteryLevel={status.batteryLevel} now={now} />}
+                  {status && <BatteryTrend readings={status.trend} online={status.online} batteryLevel={status.batteryLevel} now={now}
+                    offline={status.offline} connectionHistoryStart={status.connectionHistoryStart} />}
                 </div>
               );
             })}

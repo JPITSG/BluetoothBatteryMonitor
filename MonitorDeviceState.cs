@@ -78,10 +78,11 @@ internal class MonitorDeviceState
     }
 }
 
-// Trend is the published history snapshot; its identity only changes with
-// its contents, so the record's default equality still detects changes.
+// Trend and Offline are published history snapshots; their identity only
+// changes with their contents, so the record's default equality still
+// detects changes.
 internal readonly record struct DeviceStatus(string Name, bool Online, int? BatteryLevel, DateTimeOffset? LastChargedAt = null,
-    BatteryHistoryEntry[]? Trend = null);
+    BatteryHistoryEntry[]? Trend = null, OfflinePeriod[]? Offline = null, DateTimeOffset? ConnectionHistoryStart = null);
 
 internal readonly record struct TrayDevice(string Name, bool Connected, bool Visible);
 

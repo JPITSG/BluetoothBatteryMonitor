@@ -13,6 +13,23 @@ namespace BluetoothBatteryMonitor;
 
 internal sealed record BatteryHistoryEntry(DateTimeOffset ObservedAt, int Percentage);
 
+internal static class ConnectionState
+{
+    public const string Connected = "connected";
+    public const string Disconnected = "disconnected";
+    // Monitoring stopped: the app closed, the PC slept or shut down, or the
+    // device was removed from monitoring. Nothing is known until the next change.
+    public const string Unmonitored = "unmonitored";
+    public static bool IsValid(string? state) => state is Connected or Disconnected or Unmonitored;
+}
+
+// The moment a device's connection state changed, as shown in configuration.
+internal sealed record ConnectionChange(DateTimeOffset At, string State);
+
+// A stretch when the device was not seen connected. To is null while it is
+// still offline. Reason is "unmonitored" only if nothing was monitored at all.
+internal sealed record OfflinePeriod(DateTimeOffset From, DateTimeOffset? To, string Reason);
+
 // The readings plotted in configuration: the current discharge since the last
 // charge ended, or the current charge since it began, whichever is nearer.
 internal static class BatteryTrend
@@ -54,10 +71,22 @@ internal static class BatteryTrend
 internal sealed class DeviceBatteryHistory
 {
     public const int MaximumEntries = 1000;
+    // Enough for months of ordinary use, or about ten days of a device that
+    // drops out a hundred times a day, while keeping each file well under the
+    // 1 MB load limit.
+    public const int MaximumConnectionChanges = 4000;
+    // Restarting the app, for example to update it, briefly stops monitoring a
+    // device that stays connected. Such short gaps are not reported as offline.
+    public static readonly TimeSpan RestartTolerance = TimeSpan.FromMinutes(2);
     public int FormatVersion { get; init; } = 1;
     public string DeviceName { get; init; } = "";
     public List<BatteryHistoryEntry> Entries { get; init; } = new();
     public DateTimeOffset? LastChargedAt { get; set; }
+    // Absent from logs written before connections were recorded; older
+    // versions ignore it, so the format version is unchanged.
+    public List<ConnectionChange> ConnectionChanges { get; set; } = new();
+
+    public DateTimeOffset? ConnectionHistoryStart => ConnectionChanges.Count > 0 ? ConnectionChanges[0].At : null;
 
     public bool Record(int percentage, DateTimeOffset observedAt)
     {
@@ -76,6 +105,70 @@ internal sealed class DeviceBatteryHistory
     }
 
     public BatteryHistoryEntry[] CurrentTrend() => BatteryTrend.Select(Entries);
+
+    public bool RecordConnection(string state, DateTimeOffset at)
+    {
+        if (!ConnectionState.IsValid(state) || at == default) return false;
+        var last = ConnectionChanges.Count > 0 ? ConnectionChanges[^1] : null;
+        // Only changes are kept, and monitoring cannot stop before anything
+        // was observed.
+        if (last?.State == state || (last == null && state == ConnectionState.Unmonitored)) return false;
+        // A change reported after a short delay is dated when it began, but
+        // never before the change preceding it.
+        var time = at.ToUniversalTime();
+        if (last != null && time < last.At) time = last.At;
+        ConnectionChanges.Add(new ConnectionChange(time, state));
+        if (ConnectionChanges.Count > MaximumConnectionChanges)
+            ConnectionChanges.RemoveRange(0, ConnectionChanges.Count - MaximumConnectionChanges);
+        return true;
+    }
+
+    // Offline stretches overlapping the time from `since` onwards, oldest first.
+    // Consecutive disconnected and unmonitored changes form one stretch.
+    public OfflinePeriod[] OfflinePeriods(DateTimeOffset since)
+    {
+        var periods = new List<OfflinePeriod>();
+        DateTimeOffset? from = null;
+        bool disconnected = false;
+        void Add(DateTimeOffset start, DateTimeOffset? end)
+        {
+            if (end is { } finish && (finish <= since || finish <= start)) return;
+            if (!disconnected && end is { } resumed && resumed - start < RestartTolerance) return;
+            periods.Add(new OfflinePeriod(start, end,
+                disconnected ? ConnectionState.Disconnected : ConnectionState.Unmonitored));
+        }
+        foreach (var change in ConnectionChanges)
+        {
+            if (change.State == ConnectionState.Connected)
+            {
+                if (from is { } start) Add(start, change.At);
+                from = null;
+                disconnected = false;
+                continue;
+            }
+            from ??= change.At;
+            disconnected |= change.State == ConnectionState.Disconnected;
+        }
+        if (from is { } open) Add(open, null);
+        return periods.ToArray();
+    }
+
+    // Stored changes are auxiliary to the readings: a damaged or edited list
+    // is repaired rather than discarding the battery log along with it.
+    public void RepairConnectionChanges()
+    {
+        var repaired = new List<ConnectionChange>();
+        foreach (var change in ConnectionChanges ?? new List<ConnectionChange>())
+        {
+            if (change == null || change.At == default || !ConnectionState.IsValid(change.State)) continue;
+            var last = repaired.Count > 0 ? repaired[^1] : null;
+            if (last?.State == change.State || (last == null && change.State == ConnectionState.Unmonitored)) continue;
+            var time = change.At.ToUniversalTime();
+            repaired.Add(new ConnectionChange(last != null && time < last.At ? last.At : time, change.State));
+        }
+        if (repaired.Count > MaximumConnectionChanges) repaired.RemoveRange(0, repaired.Count - MaximumConnectionChanges);
+        ConnectionChanges = repaired;
+    }
 }
 
 // All file access and history mutation run on one worker. The tray/UI only
@@ -95,6 +188,8 @@ internal sealed class BatteryHistoryStore : IDisposable
     private readonly HashSet<string> _dirty = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastCharges = new(StringComparer.OrdinalIgnoreCase);
     private readonly ConcurrentDictionary<string, BatteryHistoryEntry[]> _trends = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, OfflinePeriod[]> _offline = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _connectionStarts = new(StringComparer.OrdinalIgnoreCase);
     private readonly Task _worker;
 
     public BatteryHistoryStore(string directory, Action<string, Exception> logError)
@@ -115,12 +210,26 @@ internal sealed class BatteryHistoryStore : IDisposable
     public BatteryHistoryEntry[]? GetTrend(string name) =>
         _trends.TryGetValue(name, out var trend) ? trend : null;
 
+    // Offline stretches within the current trend, including one still open.
+    public OfflinePeriod[]? GetOffline(string name) =>
+        _offline.TryGetValue(name, out var offline) ? offline : null;
+
+    // When connection changes began to be recorded for this device, if ever.
+    public DateTimeOffset? GetConnectionHistoryStart(string name) =>
+        _connectionStarts.TryGetValue(name, out var start) ? start : null;
+
     public void Load(string name) => _commands.Writer.TryWrite(new HistoryCommand(name));
 
     public void Record(string name, int percentage, DateTimeOffset observedAt)
     {
         if (string.IsNullOrWhiteSpace(name) || percentage is < 0 or > 100 || observedAt == default) return;
         _commands.Writer.TryWrite(new HistoryCommand(name, percentage, observedAt));
+    }
+
+    public void RecordConnection(string name, string state, DateTimeOffset at)
+    {
+        if (string.IsNullOrWhiteSpace(name) || !ConnectionState.IsValid(state) || at == default) return;
+        _commands.Writer.TryWrite(new HistoryCommand(name, ObservedAt: at, Connection: state));
     }
 
     public Task FlushAsync()
@@ -145,7 +254,9 @@ internal sealed class BatteryHistoryStore : IDisposable
             try
             {
                 var history = await LoadAsync(command.Name).ConfigureAwait(false);
-                if (command.Percentage is int percentage && history.Record(percentage, command.ObservedAt))
+                if (command.Connection is { } state
+                        ? history.RecordConnection(state, command.ObservedAt)
+                        : command.Percentage is int percentage && history.Record(percentage, command.ObservedAt))
                     _dirty.Add(command.Name);
                 Publish(history);
                 if (_dirty.Contains(command.Name)) await SaveAsync(history).ConfigureAwait(false);
@@ -174,6 +285,7 @@ internal sealed class BatteryHistoryStore : IDisposable
                 history.Entries.Any(entry => entry == null || entry.Percentage is < 0 or > 100 || entry.ObservedAt == default) ||
                 history.LastChargedAt == default(DateTimeOffset))
                 throw new InvalidDataException("Invalid battery history contents.");
+            history.RepairConnectionChanges();
         }
         catch (Exception error) when (error is FileNotFoundException or DirectoryNotFoundException)
         {
@@ -205,6 +317,17 @@ internal sealed class BatteryHistoryStore : IDisposable
             // Replaced only on change, so an unchanged snapshot keeps its identity
             // and the dialog can skip repeated status messages.
             _trends[history.DeviceName] = trend;
+            changed = true;
+        }
+        var offline = trend.Length == 0 ? Array.Empty<OfflinePeriod>() : history.OfflinePeriods(trend[0].ObservedAt);
+        if (GetOffline(history.DeviceName) is not { } previousOffline || !previousOffline.SequenceEqual(offline))
+        {
+            _offline[history.DeviceName] = offline;
+            changed = true;
+        }
+        if (history.ConnectionHistoryStart is { } start && GetConnectionHistoryStart(history.DeviceName) != start)
+        {
+            _connectionStarts[history.DeviceName] = start;
             changed = true;
         }
         if (changed) Changed?.Invoke();
@@ -245,5 +368,5 @@ internal sealed class BatteryHistoryStore : IDisposable
     }
 
     private sealed record HistoryCommand(string Name, int? Percentage = null,
-        DateTimeOffset ObservedAt = default, TaskCompletionSource? Completion = null);
+        DateTimeOffset ObservedAt = default, TaskCompletionSource? Completion = null, string? Connection = null);
 }

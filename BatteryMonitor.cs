@@ -33,6 +33,8 @@ namespace BluetoothBatteryMonitor
         private readonly SynchronizationContext _syncContext;
         private readonly CancellationTokenSource _disposeCts;
         private readonly BatteryHistoryStore _batteryHistory;
+        private readonly ConnectionTracker _connectionTracker;
+        private long _lastHeartbeatTick;
         private DeviceWatcher? _deviceWatcher;
         private DeviceWatcher? _classicDeviceWatcher;
         private readonly TimeSpan _stateVerificationInterval = TimeSpan.FromSeconds(60);
@@ -55,6 +57,10 @@ namespace BluetoothBatteryMonitor
 
         private const string RegistryKeyPath = @"SOFTWARE\JPIT\BluetoothBatteryMonitor";
         private const string RegistryDevicesValue = "Devices";
+        // When the app last ran, so connection history can mark when monitoring
+        // stopped after a crash or power loss, which records nothing itself.
+        private const string RegistryHeartbeatValue = "MonitoringHeartbeat";
+        private static readonly TimeSpan HeartbeatInterval = TimeSpan.FromMinutes(1);
         internal const string ShowConfigurationEventName = @"Global\BluetoothBatteryMonitor_ShowConfig";
 
         private static readonly Guid BatteryServiceUuid = new("0000180f-0000-1000-8000-00805f9b34fb");
@@ -144,6 +150,7 @@ namespace BluetoothBatteryMonitor
                 Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
                 "BluetoothBatteryMonitor", "battery-history"), LogMonitorError);
             _batteryHistory.Changed += OnBatteryHistoryChanged;
+            _connectionTracker = new ConnectionTracker((name, state, at) => _batteryHistory.RecordConnection(name, state, at));
 
             _devices = new Dictionary<string, DeviceInfo>(StringComparer.OrdinalIgnoreCase);
             _trayIcons = new Dictionary<string, PersistentTrayIcon>();
@@ -154,10 +161,12 @@ namespace BluetoothBatteryMonitor
             SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
             SystemEvents.SessionSwitch += OnSessionSwitch;
             SystemEvents.PowerModeChanged += OnPowerModeChanged;
+            SystemEvents.SessionEnded += OnSessionEnded;
 
             _trayIconSize = TrayIconRenderer.GetTaskbarIconSize() ?? new Size(16, 16);
             LoadBatteryIcons();
             InitializeDevices();
+            RecoverConnectionHistory();
             bool shouldShowConfigurationOnLaunch = forceConfiguration || (configureIfEmpty && _devices.Count == 0);
             CreateTrayIcons();
 
@@ -205,7 +214,49 @@ namespace BluetoothBatteryMonitor
         #region Session Change Handling
         private void OnPowerModeChanged(object sender, PowerModeChangedEventArgs e)
         {
+            if (e.Mode == PowerModes.Suspend) StopConnectionHistory();
             if (e.Mode == PowerModes.Resume) ScheduleSessionReconnect();
+        }
+
+        private void OnSessionEnded(object? sender, SessionEndedEventArgs e) => StopConnectionHistory();
+
+        // Sleep, shutdown and sign-out can end the process as soon as the
+        // notification returns, so persist when monitoring stopped right away.
+        private void StopConnectionHistory()
+        {
+            _connectionTracker.Stop(DateTimeOffset.UtcNow);
+            try { _batteryHistory.FlushAsync().Wait(TimeSpan.FromSeconds(2)); }
+            catch (Exception ex) { LogMonitorError("Save connection history", ex); }
+        }
+
+        // A clean stop recorded when monitoring ended. Otherwise the last
+        // heartbeat bounds it; the store ignores this if a stop is already logged.
+        private void RecoverConnectionHistory()
+        {
+            try
+            {
+                // A heartbeat from the future means the clock was set back; dating
+                // a stop then would hold every later change at that time.
+                if (Registry.GetValue(@"HKEY_CURRENT_USER\" + RegistryKeyPath, RegistryHeartbeatValue, null) is string value &&
+                    DateTimeOffset.TryParse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var lastRun) &&
+                    lastRun <= DateTimeOffset.UtcNow)
+                    foreach (var name in _devices.Keys) _batteryHistory.RecordConnection(name, ConnectionState.Unmonitored, lastRun);
+            }
+            catch (Exception ex) { LogMonitorError("Read monitoring heartbeat", ex); }
+            _connectionTracker.Settle(DateTimeOffset.UtcNow);
+        }
+
+        private void WriteHeartbeat(DateTimeOffset now)
+        {
+            long tick = Environment.TickCount64;
+            if (_lastHeartbeatTick != 0 && tick - _lastHeartbeatTick < HeartbeatInterval.TotalMilliseconds) return;
+            _lastHeartbeatTick = tick;
+            try
+            {
+                using var key = Registry.CurrentUser.CreateSubKey(RegistryKeyPath);
+                key.SetValue(RegistryHeartbeatValue, now.ToString("O", CultureInfo.InvariantCulture));
+            }
+            catch (Exception ex) { LogMonitorError("Write monitoring heartbeat", ex); }
         }
 
         private void StartBatteryRecovery()
@@ -259,6 +310,8 @@ namespace BluetoothBatteryMonitor
             // Icon recovery must not wait for Bluetooth I/O or be suppressed
             // by an already-running battery recovery after another event.
             RequestTrayIconRefresh();
+            // Watchers restart below; devices reappearing is not a reconnection.
+            _connectionTracker.Settle(DateTimeOffset.UtcNow);
             if (_disposeCts.IsCancellationRequested || Interlocked.Exchange(ref _sessionRefreshPending, 1) == 1)
                 return;
 
@@ -534,7 +587,9 @@ namespace BluetoothBatteryMonitor
             .Select(device => device.DisplayStatus with
             {
                 LastChargedAt = _batteryHistory.GetLastChargedAt(device.Name),
-                Trend = _batteryHistory.GetTrend(device.Name)
+                Trend = _batteryHistory.GetTrend(device.Name),
+                Offline = _batteryHistory.GetOffline(device.Name),
+                ConnectionHistoryStart = _batteryHistory.GetConnectionHistoryStart(device.Name)
             }).ToArray();
 
         private void OnBatteryHistoryChanged()
@@ -639,6 +694,8 @@ namespace BluetoothBatteryMonitor
 
         private void ReloadConfiguration()
         {
+            // Devices are released and found again; that is not a disconnection.
+            _connectionTracker.Settle(DateTimeOffset.UtcNow);
             StopDeviceWatchers();
 
             foreach (var icon in _trayIcons.Values.ToArray())
@@ -1343,6 +1400,11 @@ namespace BluetoothBatteryMonitor
                 UpdateTrayIconText(deviceName, deviceInfo);
                 UpdateContextMenuItems(deviceName);
             }
+
+            // Record connection changes as configuration shows them.
+            var utcNow = DateTimeOffset.UtcNow;
+            _connectionTracker.Sample(utcNow, _devices.Values.Select(device => (device.Name, device.IsConnectedForDisplay)));
+            WriteHeartbeat(utcNow);
         }
 
         private void UpdateTrayIconText(string deviceName, DeviceInfo deviceInfo)
@@ -1603,6 +1665,7 @@ namespace BluetoothBatteryMonitor
                 SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged;
                 SystemEvents.SessionSwitch -= OnSessionSwitch;
                 SystemEvents.PowerModeChanged -= OnPowerModeChanged;
+                SystemEvents.SessionEnded -= OnSessionEnded;
                 _batteryRecoveryTimer.Stop();
                 _batteryRecoveryTimer.Tick -= OnBatteryRecoveryTick;
                 _batteryRecoveryTimer.Dispose();
@@ -1671,6 +1734,8 @@ namespace BluetoothBatteryMonitor
             catch { }
             finally
             {
+                // Exit and update: the store drains this before closing.
+                _connectionTracker.Stop(DateTimeOffset.UtcNow);
                 _batteryHistory.Changed -= OnBatteryHistoryChanged;
                 _batteryHistory.Dispose();
             }

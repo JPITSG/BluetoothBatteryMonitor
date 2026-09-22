@@ -17,7 +17,7 @@
   #feedback { min-height: 16px; margin: 10px 0 0; }
 </style>
 <main>
-  <p class="note">Configuration preview · Sample device and charge data</p>
+  <p class="note">Configuration preview · Sample devices, charges and disconnections</p>
   <div class="window">
     <header><img src="../assets/icon.ico" alt="">Bluetooth Battery Monitor</header>
     <iframe title="Configuration modal with sample battery history"></iframe>
@@ -27,6 +27,9 @@
 <script type="module">
 const frame = document.querySelector('iframe');
 const feedback = document.querySelector('#feedback');
+// ?zoom=3 enlarges the preview to inspect the graphs up close.
+const zoom = Number(new URLSearchParams(location.search).get('zoom'));
+if (zoom > 0) document.querySelector('main').style.zoom = zoom;
 function mockHost(version) {
   const listeners = new Set();
   const chargeAt = (daysAgo, hour, minute) => {
@@ -38,17 +41,46 @@ function mockHost(version) {
   const devices = [
     { name: 'MX Master 3S', isConfigured: true },
     { name: 'MX Keys', isConfigured: true },
+    { name: 'Keychron K1 Max', isConfigured: true },
     { name: 'WH-1000XM5', isConfigured: true },
     { name: 'Bluetooth speaker', isConfigured: false },
   ];
   const hoursAgo = (hours, percentage) => ({ observedAt: new Date(Date.now() - hours * 3600e3).toISOString(), percentage });
+  const at = hours => new Date(Date.now() - hours * 3600e3).toISOString();
+  const gap = (fromHours, toHours, reason = 'disconnected') => ({ from: at(fromHours), to: toHours === null ? null : at(toHours), reason });
+  // The PC sleeps overnight, from about 23:30 to 07:15 local time.
+  const nights = days => Array.from({ length: days }, (_, day) => {
+    const wake = new Date(); wake.setDate(wake.getDate() - day); wake.setHours(7, 15, 0, 0);
+    const sleep = new Date(wake); sleep.setDate(sleep.getDate() - 1); sleep.setHours(23, 30, 0, 0);
+    return [(Date.now() - sleep) / 3600e3, (Date.now() - wake) / 3600e3];
+  }).filter(([, to]) => to > 0);
+  // A keyboard that sleeps after a few idle minutes: many short disconnections.
+  let seed = 7;
+  const random = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  const flaky = [];
+  for (let hours = 70; hours > 0.5; hours -= 0.15 + random() * 0.9) {
+    const minutes = 2 + random() ** 2 * 25;
+    flaky.push([hours, Math.max(0.3, hours - minutes / 60)]);
+    hours -= minutes / 60;
+  }
+  const withNights = (periods, days, reason) => {
+    const all = [...periods.filter(([from, to]) => !nights(days).some(([start, end]) => from <= start && from >= end || to <= start && to >= end))
+      .map(([from, to]) => gap(from, to)), ...nights(days).map(([from, to]) => gap(from, to, reason))];
+    return all.sort((left, right) => Date.parse(left.from) - Date.parse(right.from));
+  };
   const deviceStatuses = [
-    { name: 'MX Master 3S', online: true, batteryLevel: 67, lastChargedAt: chargeAt(2, 10, 42),
-      trend: [hoursAgo(52, 100), hoursAgo(40, 95), hoursAgo(31, 90), hoursAgo(24, 85), hoursAgo(18, 80), hoursAgo(9, 75), hoursAgo(4, 70), hoursAgo(1, 67)] },
-    { name: 'MX Keys', online: true, batteryLevel: 88, lastChargedAt: null,
-      trend: [hoursAgo(1.4, 62), hoursAgo(1.1, 70), hoursAgo(0.8, 78), hoursAgo(0.4, 84), hoursAgo(0.1, 88)] },
-    { name: 'WH-1000XM5', online: false, batteryLevel: null, lastChargedAt: chargeAt(5, 18, 15),
-      trend: [hoursAgo(120, 100), hoursAgo(96, 90), hoursAgo(80, 70), hoursAgo(60, 60), hoursAgo(50, 40)] },
+    { name: 'MX Master 3S', online: true, batteryLevel: 67, lastChargedAt: chargeAt(2, 10, 42), connectionHistoryStart: at(400),
+      trend: [hoursAgo(52, 100), hoursAgo(40, 95), hoursAgo(31, 90), hoursAgo(24, 85), hoursAgo(18, 80), hoursAgo(9, 75), hoursAgo(4, 70), hoursAgo(1, 67)],
+      offline: withNights([[36, 35.6], [34.2, 34], [30.5, 29.8], [28.1, 28], [14, 13.5], [12.2, 12.05], [6, 5.75], [2.6, 2.4]], 3, 'unmonitored') },
+    { name: 'MX Keys', online: true, batteryLevel: 88, lastChargedAt: null, connectionHistoryStart: at(400),
+      trend: [hoursAgo(1.4, 62), hoursAgo(1.1, 70), hoursAgo(0.8, 78), hoursAgo(0.4, 84), hoursAgo(0.1, 88)],
+      offline: [gap(0.62, 0.52)] },
+    { name: 'Keychron K1 Max', online: true, batteryLevel: 83, lastChargedAt: chargeAt(3, 9, 5), connectionHistoryStart: at(400),
+      trend: [hoursAgo(72, 95), hoursAgo(60, 92), hoursAgo(48, 90), hoursAgo(36, 88), hoursAgo(24, 87), hoursAgo(12, 85), hoursAgo(2, 83)],
+      offline: withNights(flaky, 4, 'unmonitored') },
+    { name: 'WH-1000XM5', online: false, batteryLevel: null, lastChargedAt: chargeAt(5, 18, 15), connectionHistoryStart: at(400),
+      trend: [hoursAgo(120, 100), hoursAgo(96, 90), hoursAgo(80, 70), hoursAgo(60, 60), hoursAgo(50, 40)],
+      offline: [gap(118, 100), gap(94, 82), gap(78, 62), gap(58, 51), gap(49.5, null)] },
   ];
   const send = data => listeners.forEach(listener => listener({ data }));
   const update = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: version };

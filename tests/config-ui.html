@@ -151,7 +151,7 @@ try {
   check(graphLabels('Mouse') === dayLabels([now - 5 * DAY, now - 2.5 * DAY, now]), 'A multi-day discharge carries three dates from the peak to the present.');
   check(graph('Mouse').querySelectorAll('path')[1].getAttribute('d') === 'M0.0 3.5 L27.2 5.6 L81.6 7.7 L108.8 10.4 L136.0 10.4',
     'A connected level continues to the present on a fixed 0–100% scale; zero and malformed readings are skipped.');
-  check(graph('Mouse').querySelectorAll('path')[0].getAttribute('d').endsWith('L136.0 10.4 L136 24.5 L0 24.5 Z') &&
+  check(graph('Mouse').querySelectorAll('path')[0].getAttribute('d').endsWith('L136.0 10.4 L136.0 24.5 L0 24.5 Z') &&
     [...graph('Mouse').querySelectorAll('circle')].every(circle => circle.getAttribute('cx') === '136' && Number(circle.getAttribute('cy')).toFixed(1) === '10.4'),
     'The area fill closes on the 0% baseline and the end marker sits on the current level.');
   const description = name => graph(name).getAttribute('aria-label');
@@ -181,6 +181,75 @@ try {
   ] });
   await wait(() => !doc.querySelector('section svg'));
   check(!graph('Headphones') && !graph('Mouse'), 'A lone reading is not drawn while disconnected or while the current level is unknown.');
+
+  // Offline periods: light red behind the battery line.
+  const since = time => new frame.contentWindow.Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(time);
+  const period = (from, to, reason = 'disconnected') => ({ from: new Date(from).toISOString(), to: to === null ? null : new Date(to).toISOString(), reason });
+  const shades = name => [...graph(name).querySelectorAll('linearGradient stop')].map(stop => Number(stop.getAttribute('stop-opacity')));
+  const gapTitles = name => [...graph(name).querySelectorAll('rect[data-gap] title')].map(title => title.textContent);
+  const offlineLine = name => description(name).split('\n')[1];
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(now - 4 * HOUR, 80), reading(now - HOUR, 67)],
+      offline: [period(now - 3 * HOUR, now - 2 * HOUR)], connectionHistoryStart: new Date(now - 10 * HOUR).toISOString() },
+    { name: 'Headphones', online: false, batteryLevel: null, trend: [reading(now - 10 * HOUR, 90), reading(now - 6 * HOUR, 70)],
+      offline: [period(now - 9 * HOUR, now - 8.5 * HOUR, 'unmonitored'), period(now - 5 * HOUR, null)],
+      connectionHistoryStart: new Date(now - 12 * HOUR).toISOString() },
+  ] });
+  await wait(() => graph('Mouse')?.querySelector('rect[data-offline]') && graph('Headphones')?.querySelector('rect[data-offline]'));
+  const band = graph('Mouse').querySelector('rect[data-offline]');
+  const gradientId = band.getAttribute('fill').match(/^url\(#(.+)\)$/)?.[1];
+  check(gradientId && graph('Mouse').querySelector('linearGradient').id === gradientId && shades('Mouse').length === 136 &&
+    band.getAttribute('y') === '4' && band.getAttribute('height') === '20' && band.getAttribute('width') === '136',
+    'Offline time is one shaded band between the 0% and 100% hairlines, with a shade for each pixel column.');
+  check(gradientId !== graph('Headphones').querySelector('linearGradient').id, 'Each graph uses its own shading.');
+  check(shades('Mouse')[50] === 1 && shades('Mouse')[10] === 0 && shades('Mouse')[100] === 0 &&
+    shades('Mouse').slice(35, 67).every(shade => shade === 1), 'A disconnection is solid red for exactly its time on the axis.');
+  const mouseParts = [...graph('Mouse').children].map(node => node.tagName.toLowerCase());
+  check(mouseParts.indexOf('rect') > mouseParts.indexOf('path') && mouseParts.lastIndexOf('path') > mouseParts.indexOf('rect'),
+    'Offline shading covers the battery area but stays under the line.');
+  check(graph('Mouse').querySelector('linearGradient stop').getAttribute('stop-color') === '#fecaca', 'Offline time is light red.');
+  check(gapTitles('Mouse').length === 1 && gapTitles('Mouse')[0].startsWith('Disconnected · ') && gapTitles('Mouse')[0].endsWith(' · 1 h'),
+    'Hovering a disconnection shows when it happened and for how long.');
+  check(offlineLine('Mouse') === 'Offline once, 1 h in total' && graph('Mouse').parentElement.title === description('Mouse'),
+    'The graph tooltip adds how often and how long the device was offline.');
+  check([...graph('Mouse').querySelectorAll('circle')].every(circle => circle.getAttribute('cx') === '136' && !circle.getAttribute('stroke')),
+    'A connected device still ends with a solid dot on its current level at the present.');
+  const headphonePath = graph('Headphones').querySelectorAll('path');
+  check(graphLabels('Headphones') === hourLabels([now - 10 * HOUR, now - 5 * HOUR, now]) &&
+    headphonePath[1].getAttribute('d') === 'M0.0 5.6 L54.4 9.8' && headphonePath[0].getAttribute('d').endsWith('L54.4 24.5 L0 24.5 Z'),
+    'A current disconnection extends the axis to the present while the line stops at the last reading.');
+  const ring = [...graph('Headphones').querySelectorAll('circle')].find(circle => circle.getAttribute('stroke'));
+  check(ring && Number(ring.getAttribute('cx')).toFixed(1) === '54.4' && ring.getAttribute('fill') === '#fff',
+    'The last known level before going offline is a ring, not a live dot.');
+  check(shades('Headphones').slice(69).every(shade => shade === 1) && shades('Headphones')[60] === 0 && shades('Headphones')[18] === 1,
+    'The current disconnection is shaded to the present, separately from earlier offline time.');
+  check(offlineLine('Headphones') === `Disconnected since ${since(now - 5 * HOUR)} · offline 2 times, 5 h 30 min in total`,
+    'The tooltip says since when the device has been disconnected.');
+  check(gapTitles('Headphones').length === 2 && gapTitles('Headphones')[0].startsWith('Not monitored (PC asleep or off, or app closed) · ') &&
+    gapTitles('Headphones')[1] === `Disconnected since ${since(now - 5 * HOUR)} · 5 h`,
+    'Time when nothing was monitored is explained separately from a disconnection.');
+
+  // Many short drop-outs: an even tint, not a comb of slivers.
+  const dropouts = Array.from({ length: 300 }, (_, index) => period(now - 70 * HOUR + index * 14 * 60e3, now - 70 * HOUR + index * 14 * 60e3 + 3 * 60e3));
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Mouse', online: true, batteryLevel: 83, trend: [reading(now - 72 * HOUR, 95), reading(now - HOUR, 83)],
+      offline: dropouts, connectionHistoryStart: new Date(now - 96 * HOUR).toISOString() },
+  ] });
+  await wait(() => offlineLine('Mouse')?.startsWith('Offline 300 times'));
+  const dense = shades('Mouse').slice(8, 128);
+  const steps = dense.slice(1).map((shade, index) => Math.abs(shade - dense[index]));
+  check(dense.every(shade => shade > 0.25 && shade < 0.6) && Math.max(...steps) < 0.1,
+    'Frequent short drop-outs blend into an even, lighter tint without stripes.');
+  check(gapTitles('Mouse').length === 0 && offlineLine('Mouse') === 'Offline 300 times, 15 h in total',
+    'Drop-outs too narrow to point at are summarised in the tooltip instead.');
+
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Mouse', online: true, batteryLevel: 70, trend: [reading(now - 10 * HOUR, 80), reading(now - HOUR, 70)],
+      offline: [], connectionHistoryStart: new Date(now - 2 * HOUR).toISOString() },
+  ] });
+  await wait(() => offlineLine('Mouse')?.startsWith('No disconnections'));
+  check(offlineLine('Mouse') === `No disconnections since ${since(now - 2 * HOUR)}` && !graph('Mouse').querySelector('rect[data-offline]'),
+    'Before recording began nothing is known, so the tooltip says since when connections are covered.');
   host.send({ type: 'deviceStatus', deviceStatuses: [] });
   await wait(() => statusOf('Mouse') === '');
   check(row('Mouse').textContent === 'Mouse', 'An unmonitored device is not assigned a fabricated connection state.');

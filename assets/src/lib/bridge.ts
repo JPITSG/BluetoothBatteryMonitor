@@ -8,6 +8,16 @@ export interface BatteryReading {
   percentage: number;
 }
 
+// A stretch when the device was not seen connected, oldest first.
+export interface OfflinePeriod {
+  from: string;
+  // Null while the device is still offline.
+  to?: string | null;
+  // "unmonitored" when nothing was monitored at all: the PC was asleep or
+  // off, or the app was closed.
+  reason: "disconnected" | "unmonitored";
+}
+
 export interface DeviceStatus {
   name: string;
   online: boolean;
@@ -15,6 +25,10 @@ export interface DeviceStatus {
   lastChargedAt?: string | null;
   // Chronological readings of the current discharge or charge.
   trend?: BatteryReading[] | null;
+  // Offline periods overlapping the trend.
+  offline?: OfflinePeriod[] | null;
+  // When connection changes began to be recorded; absent if never.
+  connectionHistoryStart?: string | null;
 }
 
 export interface DeviceState {
