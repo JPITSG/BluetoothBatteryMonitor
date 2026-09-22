@@ -25,7 +25,7 @@ internal sealed class AppUpdater : IDisposable
     internal event Action? Changed;
     internal event Action? UpdateAvailable;
     internal string Status { get; private set; } = "";
-    internal long? DownloadKilobytesPerSecond { get; private set; }
+    internal long? DownloadPercent { get; private set; }
     internal bool Busy => _cancellation != null || _installing;
     internal bool Installing => _installing;
     internal bool CanInstall => _staged != null && _available >= CurrentVersion;
@@ -69,7 +69,7 @@ internal sealed class AppUpdater : IDisposable
             return;
         }
         Discard();
-        DownloadKilobytesPerSecond = null;
+        DownloadPercent = null;
         AutomaticResult = automatic;
         using var cancellation = new CancellationTokenSource(TimeSpan.FromMinutes(10));
         _cancellation = cancellation;
@@ -83,7 +83,7 @@ internal sealed class AppUpdater : IDisposable
             {
                 // Progress can already be queued when cancellation/completion wins.
                 if (!acceptingProgress || !ReferenceEquals(_cancellation, cancellation) || cancellation.IsCancellationRequested) return;
-                DownloadKilobytesPerSecond = download.KilobytesPerSecond;
+                DownloadPercent = download.Percent;
                 Status = $"Downloading… {download.Percent}% ({download.KilobytesPerSecond} KB/s)";
                 Changed?.Invoke();
             });
@@ -102,7 +102,7 @@ internal sealed class AppUpdater : IDisposable
         finally
         {
             acceptingProgress = false;
-            DownloadKilobytesPerSecond = null;
+            DownloadPercent = null;
             await Task.Run(() => Delete(path));
             _cancellation = null;
             Changed?.Invoke();

@@ -296,7 +296,7 @@ namespace BluetoothBatteryMonitor
             var updater = AppUpdater.Instance;
             SendMessage(new { type = "update", status = updater.Status, busy = updater.Busy, installing = updater.Installing,
                 canInstall = updater.CanInstall, automatic = updater.AutomaticResult,
-                downloadKilobytesPerSecond = updater.DownloadKilobytesPerSecond,
+                downloadPercent = updater.DownloadPercent,
                 currentVersion = AppUpdater.DisplayVersion, remoteVersion = updater.AvailableVersion });
         }
 

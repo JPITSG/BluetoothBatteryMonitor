@@ -67,12 +67,12 @@ export default function UpdateControls({ version, onSave }: { version: string; o
                 setStopping(true);
                 postMessage({ action: "cancelUpdate" });
               } else {
-                setUpdate((current) => ({ ...current, busy: true, canInstall: false, downloadKilobytesPerSecond: null, status: "Checking for updates…" }));
+                setUpdate((current) => ({ ...current, busy: true, canInstall: false, downloadPercent: null, status: "Checking for updates…" }));
                 postMessage({ action: "checkUpdate" });
               }
             }}>
-            <span>{update.installing ? "Starting..." : stopping ? "Stopping..." : update.busy
-              ? update.downloadKilobytesPerSecond != null ? `Checking (${update.downloadKilobytesPerSecond}kb/s)...` : "Checking..."
+            <span className="tabular-nums">{update.installing ? "Starting..." : stopping ? "Stopping..." : update.busy
+              ? update.downloadPercent != null ? `Checking (${update.downloadPercent}%)...` : "Checking..."
               : "Update"}</span>
           </Button>
           <Button variant="outline" size="sm" className="min-w-[5rem]" disabled={update.installing} onClick={closeDialog}>Cancel</Button>

@@ -35,7 +35,8 @@ export interface UpdateState {
   installing: boolean;
   canInstall: boolean;
   automatic: boolean;
-  downloadKilobytesPerSecond?: number | null;
+  // Whole percent of the update download received so far.
+  downloadPercent?: number | null;
   currentVersion?: string;
   remoteVersion?: string;
 }

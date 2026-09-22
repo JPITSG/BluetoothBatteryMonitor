@@ -105,7 +105,7 @@ To run the configuration UI checks, build the frontend with `make frontend`,
 serve the repository with `python3 -m http.server 8782 --bind 127.0.0.1`, and open
 `http://127.0.0.1:8782/tests/config-ui.html` in a browser. This uses a simulated
 WebView host to check immediate update/cancel feedback, delayed device discovery,
-selection preservation, live download speed, per-update reopening, checkbox alignment,
+selection preservation, live download percentage, per-update reopening, checkbox alignment,
 battery trend graphs, and scrolling.
 Native WebView2 startup and the installer handoff still require Windows verification.
 
@@ -123,7 +123,7 @@ Repeat with the same scale on both sessions to cover taskbar refreshes without a
 
 ## Updates
 
-Version: **1.0.22**.
+Version: **1.0.26**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
@@ -132,11 +132,13 @@ persists across restarts and only affects automatic checks.
 
 The updater downloads the executable from this repository's
 `main/release/BluetoothBatteryMonitor.exe` on GitHub, validates its size, architecture,
-product identity and embedded Windows version, and shows both versions. Downloads
-show progress in the tooltip and live speed in the red button, for example
-**Checking (100kb/s)...**. Speed is rounded to whole kilobytes per second
-(1 KB = 1,024 bytes), sampled every 250 ms, and falls to zero when transfer stalls.
-Click the red button to cancel the check/download. **Update** replaces the
+product identity and embedded Windows version, and shows both versions. While
+downloading, the red button shows how much of the file has arrived, for example
+**Checking (42%)...**. It updates every 250 ms and rounds down, so it reads 100%
+only once the whole file is received. Its tooltip adds the transfer speed in whole
+kilobytes per second (1 KB = 1,024 bytes), which falls to zero when transfer stalls.
+Click the red button again to stop the check and download; the partial file is
+deleted. **Update** replaces the
 executable and restarts the app; **Force update** reinstalls an equal version.
 Older versions are never installed. A helper waits for the running app to exit,
 keeps a backup during replacement, and restores it if launching the new executable
