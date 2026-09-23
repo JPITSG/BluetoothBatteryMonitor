@@ -782,7 +782,7 @@ namespace BluetoothBatteryMonitor
             }
         }
 
-        private static void LogMonitorError(string operation, Exception error)
+        internal static void LogMonitorError(string operation, Exception error)
         {
             try
             {

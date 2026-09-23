@@ -54,7 +54,7 @@ function mockHost() {
     postMessage: raw => {
       const message = JSON.parse(raw);
       messages.push(message);
-      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.16', autoCheck: false, loadingDevices: true }), 0);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses, version: '1.0.16', autoCheck: false, startWithWindows: false, loadingDevices: true }), 0);
       if (message.action === 'getDeviceStatus') setTimeout(() => send({ type: 'deviceStatus', deviceStatuses }), 0);
       if (message.action === 'getUpdateState') setTimeout(() => send(state), 0);
       if (message.action === 'resize') parent.postMessage({ testHeight: message.height }, '*');
@@ -79,6 +79,21 @@ try {
   await paint();
   check(!!button('Update') && doc.body.textContent.includes('Refreshing devices'), 'Footer and saved devices are usable before discovery finishes.');
   check(doc.querySelector('section h2').textContent === 'Monitored', 'The device card is titled Monitored.');
+  const startup = doc.querySelector('#startWithWindows');
+  const startupCaption = [...doc.querySelectorAll('p')].find(p => p.textContent === 'Launches in the tray when you sign in to Windows.');
+  check(startup && doc.querySelector('label[for="startWithWindows"]').textContent === 'Start with Windows' &&
+    startupCaption?.parentElement.parentElement.contains(startup), 'Start with Windows is worded as in APIMonitor.');
+  check((startup.compareDocumentPosition(doc.querySelector('#autoCheckForUpdates')) & 4) !== 0 &&
+    (doc.querySelector('section').compareDocumentPosition(startup) & 4) !== 0,
+    'Start with Windows sits between the device list and the automatic update option.');
+  check(!startup.checked, 'The checkbox starts from the state Windows reports.');
+  startup.click();
+  await paint();
+  check(startup.checked && host.messages.findLast(message => message.action === 'startWithWindows')?.enabled === true &&
+    !host.messages.some(message => message.action === 'saveDevices'), 'Turning it on applies at once, without saving the device selection.');
+  host.send({ type: 'startWithWindows', enabled: false });
+  await wait(() => !startup.checked);
+  check(!startup.checked, 'If Windows startup could not be changed, the checkbox shows the real state.');
   check(deviceOrder() === 'Mouse|Headphones|Earbuds|Keyboard', 'Saved checked devices appear first when configuration opens, connected ones leading, then alphabetical.');
   checkbox('Keyboard').focus();
   checkbox('Keyboard').click();

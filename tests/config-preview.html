@@ -92,11 +92,15 @@ function mockHost(version) {
     postMessage: raw => {
       const message = JSON.parse(raw);
       if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses,
-        version, autoCheck: true, loadingDevices: false }), 0);
+        version, autoCheck: true, startWithWindows: true, loadingDevices: false }), 0);
       if (message.action === 'getDeviceStatus') setTimeout(() => send({ type: 'deviceStatus', deviceStatuses }), 0);
       if (message.action === 'getUpdateState') setTimeout(() => send(update), 0);
       if (message.action === 'resize') parent.postMessage({ previewHeight: message.height }, '*');
       if (message.action === 'saveDevices' || message.action === 'close') tell('Preview only — no settings changed. The modal stays open for tweaks.');
+      if (message.action === 'startWithWindows') {
+        setTimeout(() => send({ type: 'startWithWindows', enabled: message.enabled }), 0);
+        tell('Preview only — Windows startup was not changed.');
+      }
       if (message.action === 'checkUpdate') {
         setTimeout(() => send({ ...update, status: 'You are up to date.' }), 250);
         tell('Preview only — no update was downloaded.');

@@ -9,6 +9,7 @@ A .NET 8 Windows system tray application that monitors battery levels for Blueto
 - Supports Bluetooth LE (GATT Battery Service), Bluetooth Classic (HFP via CfgMgr32), and Windows device property fallback
 - WebView2 configuration dialog for selecting which paired devices to monitor, with checked devices first (connected ones leading), live connected/disconnected and battery status beside each monitored device checkbox, and a small battery trend graph for the current discharge or charge. Only the checkbox toggles monitoring; the name, status and graph are not click targets.
 - Device configuration persisted in Windows Registry (`HKCU\SOFTWARE\JPIT\BluetoothBatteryMonitor`)
+- Optional start with Windows at sign-in (per user, no administrator rights needed)
 - Zero-percent readings follow disconnected status and tray visibility rules. Disconnected and unknown batteries use the plain empty-battery icon.
 - Each device has a stable tray GUID so Explorer can retain its preferences across app restarts, updates, and connection changes. After upgrading from older icons, arrange the icons once; subsequent launches reuse those identities. Keep the executable at the same path.
 - Startup uses Windows battery properties and cached Bluetooth battery data for devices confirmed connected, then refreshes from the device
@@ -28,6 +29,15 @@ On first launch, a sentinel battery icon appears in the tray. Right-click it and
   preserving unsaved edits. Configuration remains available in the taskbar.
 - **Double-click** any device icon to open Windows Bluetooth settings
 - **`--listdevices`** flag: shows all paired Bluetooth devices in a dialog and exits
+
+**Start with Windows**, above **Automatically check for updates** in
+configuration, adds or removes a `BluetoothBatteryMonitor` value under
+`HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` that launches
+this executable when you sign in. It is off by default and, like automatic update
+checks, applies as soon as it is toggled. An entry disabled in Task Manager's
+startup apps, or one that launches another copy of the executable, shows as off;
+turning the toggle on replaces or re-enables it. If you previously placed a
+shortcut in your Startup folder, remove it after turning this on.
 
 ## Battery history
 
@@ -144,7 +154,7 @@ Repeat with the same scale on both sessions to cover taskbar refreshes without a
 
 ## Updates
 
-Version: **1.0.27**.
+Version: **1.0.28**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,

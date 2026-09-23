@@ -141,6 +141,9 @@ namespace BluetoothBatteryMonitor
                     case "autoUpdate":
                         AppUpdater.Instance.AutoCheck = json.RootElement.GetProperty("enabled").GetBoolean();
                         break;
+                    case "startWithWindows":
+                        SetStartWithWindows(json.RootElement.GetProperty("enabled").GetBoolean());
+                        break;
 
                     case "saveDevices":
                         HandleSaveDevices(json.RootElement);
@@ -234,12 +237,34 @@ namespace BluetoothBatteryMonitor
             {
                 type = "init", devices = BuildDeviceList(configuredNames, _cachedPairedNames),
                 version = AppUpdater.DisplayVersion, autoCheck = AppUpdater.Instance.AutoCheck,
+                startWithWindows = ReadStartWithWindows(),
                 loadingDevices = true, deviceStatuses = _monitor.GetDeviceStatuses()
             });
             SendUpdateState();
             _ = RefreshDevicesAsync(configuredNames);
             if (!AppUpdater.Instance.Status.StartsWith("Successfully updated", StringComparison.Ordinal))
                 _ = AppUpdater.Instance.CheckAsync(true);
+        }
+
+        // Applied immediately, like automatic update checks. Only a change touches
+        // the Run entry, so an entry for another copy of the app is left alone
+        // unless it is turned on here. The reply is the resulting state, so the
+        // checkbox stays truthful if the registry could not be changed.
+        private void SetStartWithWindows(bool enable)
+        {
+            try { if (enable != StartWithWindows.IsEnabled()) StartWithWindows.Set(enable); }
+            catch (Exception ex) { BatteryMonitor.LogMonitorError(enable ? "Enable start with Windows" : "Disable start with Windows", ex); }
+            SendMessage(new { type = "startWithWindows", enabled = ReadStartWithWindows() });
+        }
+
+        private static bool ReadStartWithWindows()
+        {
+            try { return StartWithWindows.IsEnabled(); }
+            catch (Exception ex)
+            {
+                BatteryMonitor.LogMonitorError("Read start with Windows", ex);
+                return false;
+            }
         }
 
         private static object[] BuildDeviceList(HashSet<string> configuredNames, IEnumerable<string> pairedNames)

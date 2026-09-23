@@ -40,6 +40,8 @@ export interface DeviceState {
 export interface InitData extends DeviceState {
   version: string;
   autoCheck: boolean;
+  // Whether this executable's per-user Run entry is present and enabled.
+  startWithWindows: boolean;
   deviceStatuses: DeviceStatus[];
 }
 
@@ -59,6 +61,8 @@ export type HostMessage =
   | ({ type: "init" } & InitData)
   | ({ type: "devices" } & DeviceState)
   | { type: "deviceStatus"; deviceStatuses: DeviceStatus[] }
+  // The resulting state after the host applies a Start with Windows change.
+  | { type: "startWithWindows"; enabled: boolean }
   | ({ type: "update" } & UpdateState);
 
 declare global {

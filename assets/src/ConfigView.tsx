@@ -6,8 +6,9 @@ import UpdateControls from "./UpdateControls";
 import LastCharged from "./LastCharged";
 import BatteryTrend from "./BatteryTrend";
 
-export default function ConfigView({ devices, version, autoCheck, loadingDevices, deviceError, deviceStatuses }: InitData) {
+export default function ConfigView({ devices, version, autoCheck, startWithWindows, loadingDevices, deviceError, deviceStatuses }: InitData) {
   const [automatic, setAutomatic] = useState(autoCheck);
+  const [startup, setStartup] = useState(startWithWindows);
   const [statuses, setStatuses] = useState(deviceStatuses);
   // Trend graphs extend a connected device's level to the present.
   const [now, setNow] = useState(() => Date.now());
@@ -17,6 +18,7 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
         setStatuses(message.deviceStatuses);
         setNow(Date.now());
       }
+      if (message.type === "startWithWindows") setStartup(message.enabled);
     });
     postMessage({ action: "getDeviceStatus" });
     const clock = setInterval(() => setNow(Date.now()), 60_000);
@@ -84,7 +86,19 @@ export default function ConfigView({ devices, version, autoCheck, loadingDevices
           {deviceError && <p role="status" className="text-neutral-500 text-[11px] leading-snug">{deviceError}</p>}
         </section>
 
+        {/* Both options apply immediately; Save stores the device selection. */}
         <div className="flex items-start gap-2 pt-1">
+          <Checkbox id="startWithWindows" checked={startup} className="mt-0.5" onChange={(event) => {
+            setStartup(event.target.checked);
+            postMessage({ action: "startWithWindows", enabled: event.target.checked });
+          }} />
+          <div className="space-y-0.5">
+            <Label htmlFor="startWithWindows" className="cursor-pointer">Start with Windows</Label>
+            <p className="text-neutral-500 text-[11px] leading-snug">Launches in the tray when you sign in to Windows.</p>
+          </div>
+        </div>
+
+        <div className="flex items-start gap-2">
           <Checkbox id="autoCheckForUpdates" checked={automatic} className="mt-0.5" onChange={(event) => {
             setAutomatic(event.target.checked);
             postMessage({ action: "autoUpdate", enabled: event.target.checked });
