@@ -110,6 +110,17 @@ internal sealed class AppUpdater : IDisposable
         if (automatic && CanInstall) UpdateAvailable?.Invoke();
     }
     internal void Cancel() => _cancellation?.Cancel();
+    internal void ConfigurationClosed()
+    {
+        // Automatic checks belong to the tray app and may reopen configuration
+        // with their result. A completed result, however, is dismissed on close
+        // so it cannot block future hourly checks behind a closed window.
+        if (_installing || (_cancellation != null && AutomaticResult)) return;
+        Cancel();
+        Discard();
+        Status = "";
+        Changed?.Invoke();
+    }
     internal void Ignore()
     {
         if (Busy || _available == null) return;

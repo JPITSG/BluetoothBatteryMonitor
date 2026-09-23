@@ -174,6 +174,7 @@ Check(retryRegistration.Update(window, iconHandle, "Mouse", true), "Retry when E
 Check(retryCalls.SequenceEqual(new[] { TrayCommand.Add, TrayCommand.Modify, TrayCommand.Add, TrayCommand.SetVersion }),
     "A failed add must not be mistaken for a registered icon, and must first check whether the shell already holds it.");
 await UpdateDownloadTests.RunAsync(Check);
+await AppUpdaterTests.RunAsync(Check);
 UpdateLaunchArgumentsTests.Run(Check);
 await BatteryHistoryTests.RunAsync(Check);
 BatteryRefreshTests.Run(Check);

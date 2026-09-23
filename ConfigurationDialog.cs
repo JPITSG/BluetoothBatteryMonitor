@@ -367,7 +367,7 @@ namespace BluetoothBatteryMonitor
                 _lifetime.Cancel();
                 _monitor.DeviceStatusesChanged -= SendDeviceStatuses;
                 AppUpdater.Instance.Changed -= SendUpdateState;
-                AppUpdater.Instance.Cancel();
+                AppUpdater.Instance.ConfigurationClosed();
                 if (_webView != null)
                 {
                     if (_webView.CoreWebView2 != null)

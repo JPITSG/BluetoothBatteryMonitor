@@ -127,7 +127,7 @@ graphs up close.
 ```bash
 make          # full build: frontend + .NET publish
 make clean    # remove all build artifacts
-make test     # connection, tray, update-download, battery-history, connection-history and trend checks
+make test     # connection, tray, updater, battery-history, connection-history and trend checks
 ```
 
 Output: `release/BluetoothBatteryMonitor.exe`
@@ -154,12 +154,20 @@ Repeat with the same scale on both sessions to cover taskbar refreshes without a
 
 ## Updates
 
-Version: **1.0.28**.
+Version: **1.0.29**.
 
 Configuration includes **Update** and **Automatically check for updates**
 (enabled by default). Automatic checks run at startup, when configuration opens,
-and every 60 minutes. A newer build opens configuration; **Ignore this version**
-persists across restarts and only affects automatic checks.
+and every 60 minutes, including while configuration is closed and the app runs
+in the tray. A newer build opens configuration with an update prompt;
+**Ignore this version** persists across restarts and only affects automatic checks.
+
+Closing configuration keeps an automatic check in progress running, so a newer
+build can still open the update prompt. Manual checks are cancelled on close.
+Closing configuration with a completed update prompt, including using the title
+bar's **X**, dismisses that result and releases its staged download; later hourly
+checks can then offer the update again. An installation already accepted is left
+to finish.
 
 The updater downloads the executable from this repository's
 `main/release/BluetoothBatteryMonitor.exe` on GitHub, validates its size, architecture,

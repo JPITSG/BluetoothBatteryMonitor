@@ -17,5 +17,8 @@
     <Compile Include="../TrayIconRefreshState.cs" Link="TrayIconRefreshState.cs" />
     <Compile Include="../UpdateDownload.cs" Link="UpdateDownload.cs" />
     <Compile Include="../UpdateLaunchArguments.cs" Link="UpdateLaunchArguments.cs" />
+    <!-- Exercise updater lifecycle with native UI entry points replaced by
+         UpdaterWindowsStubs; registry and installer paths are never invoked. -->
+    <Compile Include="../AppUpdater.cs" Link="AppUpdater.cs" />
   </ItemGroup>
 </Project>
