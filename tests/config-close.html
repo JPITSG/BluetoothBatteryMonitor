@@ -1,0 +1,247 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<title>Configuration close checks</title>
+<style>
+  body { margin: 24px; background: #f4f4f5; color: #262626; font: 14px system-ui; }
+  iframe { width: 420px; height: 350px; border: 1px solid #d4d4d4; background: white; border-radius: 6px; }
+  li { margin-bottom: 6px; } .fail { color: #b91c1c; } .pass { color: #166534; }
+</style>
+<h1>Configuration close checks</h1>
+<p>Uses the built UI with a simulated WebView host to exercise pending edits and close requests.</p>
+<iframe title="Configuration close preview"></iframe>
+<ol id="results"></ol>
+<p id="outcome" role="status">Running…</p>
+<script type="module">
+const frame = document.querySelector('iframe');
+let checks = 0;
+const check = (condition, message) => {
+  const item = document.createElement('li');
+  item.className = condition ? 'pass' : 'fail';
+  item.textContent = `${condition ? 'PASS' : 'FAIL'}: ${message}`;
+  document.querySelector('#results').append(item);
+  if (!condition) throw new Error(message);
+  checks++;
+};
+const wait = async predicate => {
+  const deadline = performance.now() + 5000;
+  while (!predicate()) {
+    if (performance.now() > deadline) throw new Error('Timed out waiting for UI');
+    await new Promise(resolve => setTimeout(resolve, 10));
+  }
+};
+function mockHost() {
+  const listeners = new Set();
+  const messages = [], errors = [];
+  const send = data => listeners.forEach(listener => listener({ data }));
+  const devices = [
+    { name: 'Headphones', isConfigured: true },
+    { name: 'Mouse', isConfigured: true },
+    { name: 'Keyboard', isConfigured: false },
+  ];
+  const update = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: '1.0.30' };
+  window.addEventListener('error', event => errors.push(event.message));
+  window.addEventListener('unhandledrejection', event => errors.push(String(event.reason)));
+  window.testHost = { messages, errors, send, devices, update };
+  window.chrome ??= {};
+  window.chrome.webview = {
+    addEventListener: (_, listener) => listeners.add(listener),
+    removeEventListener: (_, listener) => listeners.delete(listener),
+    postMessage: raw => {
+      const message = JSON.parse(raw);
+      messages.push(message);
+      if (message.action === 'getInit') setTimeout(() => send({ type: 'init', devices, deviceStatuses: [],
+        version: '1.0.30', autoCheck: false, startWithWindows: false, loadingDevices: true }), 0);
+      if (message.action === 'getUpdateState') setTimeout(() => send(update), 0);
+      // Saving/closing deliberately leaves the page alive for assertions.
+    },
+  };
+}
+let doc, host, win;
+const paint = () => new Promise(resolve => win.requestAnimationFrame(() => win.requestAnimationFrame(resolve)));
+const button = (text, scope = doc) => [...scope.querySelectorAll('button')].find(item => item.textContent === text);
+const checkbox = name => doc.querySelector(`[data-device="${name}"] input`);
+const alert = () => doc.querySelector('[role="alertdialog"]');
+const pendingPrompt = () => !!doc.querySelector('#save-alert-title');
+const actions = () => host.messages.filter(message => ['close', 'saveDevices'].includes(message.action));
+const nativeClose = () => host.send({ type: 'closeRequested' });
+const key = (value, shiftKey = false) => doc.dispatchEvent(new win.KeyboardEvent('keydown', { key: value, shiftKey, bubbles: true, cancelable: true }));
+const clickButton = async (text, scope = doc) => {
+  const target = button(text, scope);
+  if (!target) throw new Error(`Missing button: ${text}`);
+  target.focus();
+  target.click();
+  await paint();
+};
+const edit = async name => { checkbox(name).click(); await paint(); };
+const prompt = async () => {
+  await wait(pendingPrompt);
+  await paint();
+  check(doc.querySelector('#save-alert-title').textContent === 'Unsaved changes' &&
+    doc.querySelector('#save-alert-message').textContent === 'Save changes before closing?', 'Prompt wording matches APIMonitor exactly.');
+  check(doc.querySelectorAll('[role="alertdialog"]').length === 1 &&
+    [...alert().querySelectorAll('button')].map(item => item.textContent).join('|') === 'Keep editing|Discard|Save',
+    'Only one alert is shown, with Keep editing, Discard, Save in that order.');
+  check(actions().length === 0, 'A refused close sends neither a save nor a close command.');
+};
+try {
+  const response = await fetch('../assets/dist/index.html');
+  if (!response.ok) throw new Error('Build the frontend first.');
+  const html = await response.text();
+  const reset = async () => {
+    if (host) check(host.errors.length === 0, 'The preceding scenario had no script errors.');
+    const previous = host;
+    frame.srcdoc = html.replace('<head>', `<head><script>(${mockHost.toString()})();<\/script>`);
+    await wait(() => frame.contentWindow.testHost && frame.contentWindow.testHost !== previous &&
+      frame.contentWindow.testHost.messages.some(message => message.action === 'configReady'));
+    doc = frame.contentDocument; win = frame.contentWindow; host = win.testHost;
+    await paint();
+  };
+
+  for (const route of ['Cancel', 'native close', 'Escape']) {
+    await reset();
+    if (route === 'Cancel') await clickButton('Cancel');
+    else if (route === 'Escape') key('Escape');
+    else nativeClose();
+    await paint();
+    check(!alert() && JSON.stringify(actions()) === '[{"action":"close"}]', `Unchanged configuration closes directly via ${route}.`);
+
+    await reset();
+    await edit('Keyboard');
+    if (route === 'Cancel') await clickButton('Cancel');
+    else if (route === 'Escape') key('Escape');
+    else nativeClose();
+    await prompt();
+    nativeClose();
+    await paint();
+    check(actions().length === 0 && doc.querySelectorAll('[role="alertdialog"]').length === 1,
+      `Repeated X/Alt+F4 requests cannot bypass the ${route} prompt.`);
+    await clickButton('Keep editing', alert());
+    check(!alert() && checkbox('Keyboard').checked && actions().length === 0, 'Keep editing restores the form and retains the selection.');
+    await edit('Keyboard');
+    await clickButton('Cancel');
+    check(!alert() && JSON.stringify(actions()) === '[{"action":"close"}]', 'Reverting an added device restores clean closing.');
+  }
+
+  await reset();
+  await edit('Mouse');
+  nativeClose();
+  await prompt();
+  await clickButton('Keep editing', alert());
+  await edit('Mouse');
+  nativeClose();
+  await paint();
+  check(!alert() && actions()[0]?.action === 'close', 'Reverting a removed device is clean even though Set insertion order changes.');
+
+  for (const throughPrompt of [false, true]) {
+    await reset();
+    await edit('Mouse');
+    await edit('Keyboard');
+    host.send({ type: 'devices', devices: [host.devices[0], host.devices[1], { name: 'Gamepad', isConfigured: false }], loadingDevices: false });
+    host.send({ type: 'deviceStatus', deviceStatuses: [{ name: 'Headphones', online: true, batteryLevel: 76 }] });
+    await paint();
+    if (throughPrompt) { nativeClose(); await prompt(); }
+    await clickButton('Save', throughPrompt ? alert() : doc);
+    check(actions().length === 1 && actions()[0].action === 'saveDevices' &&
+      actions()[0].devices.slice().sort().join('|') === 'Headphones|Keyboard',
+      `${throughPrompt ? 'Prompt' : 'Footer'} Save persists the edited selection, including a selected device missing from late discovery.`);
+  }
+
+  await reset();
+  await edit('Mouse');
+  await edit('Headphones');
+  nativeClose();
+  await prompt();
+  await clickButton('Save', alert());
+  check(actions().length === 1 && actions()[0].action === 'saveDevices' && actions()[0].devices.length === 0,
+    'Save accepts an intentionally empty monitored selection.');
+
+  await reset();
+  await edit('Keyboard');
+  await clickButton('Cancel');
+  await prompt();
+  await clickButton('Discard', alert());
+  check(JSON.stringify(actions()) === '[{"action":"close"}]', 'Discard closes without saving the pending selection.');
+
+  await reset();
+  doc.querySelector('#startWithWindows').click();
+  doc.querySelector('#autoCheckForUpdates').click();
+  host.send({ type: 'startWithWindows', enabled: true });
+  await paint();
+  nativeClose();
+  await paint();
+  check(host.messages.some(message => message.action === 'startWithWindows' && message.enabled) &&
+    host.messages.some(message => message.action === 'autoUpdate' && message.enabled), 'Both immediate preferences still apply when toggled.');
+  check(!alert() && JSON.stringify(actions()) === '[{"action":"close"}]', 'Already-applied preferences do not trigger an unsaved-changes warning.');
+
+  await reset();
+  host.send({ type: 'devices', devices: [...host.devices, { name: 'Gamepad', isConfigured: false }], loadingDevices: false });
+  host.send({ type: 'deviceStatus', deviceStatuses: [{ name: 'Mouse', online: true, batteryLevel: 61 }] });
+  await paint();
+  nativeClose();
+  await paint();
+  check(!alert() && actions()[0]?.action === 'close', 'Discovery and live battery updates alone leave the configuration clean.');
+
+  await reset();
+  await edit('Keyboard');
+  const height = doc.querySelector('#root').getBoundingClientRect().height;
+  await clickButton('Cancel');
+  await prompt();
+  const overlay = alert().parentElement;
+  const overlayStyle = win.getComputedStyle(overlay);
+  const overlayColor = overlayStyle.backgroundColor;
+  const bounds = overlay.getBoundingClientRect();
+  check(overlayColor === 'rgba(0, 0, 0, 0.35)' && overlayStyle.position === 'fixed' &&
+    bounds.left === 0 && bounds.top === 0 && bounds.width === win.innerWidth && bounds.height === win.innerHeight,
+    'The 35% black overlay covers the whole page, matching APIMonitor.');
+  check(doc.querySelector('#root').getBoundingClientRect().height === height, 'Opening the overlay does not resize the configuration window.');
+  check(alert().getAttribute('aria-modal') === 'true' && checkbox('Keyboard').closest('[inert]') &&
+    button('Cancel').closest('[inert]'), 'The alert is modal and the entire underlying form is inert.');
+  check(doc.activeElement === button('Keep editing', alert()), 'Keep editing receives initial focus.');
+  button('Save', alert()).focus(); key('Tab');
+  check(doc.activeElement === button('Keep editing', alert()), 'Tab wraps from Save to Keep editing.');
+  key('Tab', true);
+  check(doc.activeElement === button('Save', alert()), 'Shift+Tab wraps from Keep editing to Save.');
+  checkbox('Keyboard').focus();
+  check(doc.activeElement === button('Save', alert()), 'Background controls cannot receive focus while the prompt is open.');
+  overlay.dispatchEvent(new win.MouseEvent('mousedown', { bubbles: true, cancelable: true }));
+  overlay.click();
+  await paint();
+  check(pendingPrompt() && actions().length === 0, 'Clicking the dark overlay neither dismisses the prompt nor closes the window.');
+  key('Escape');
+  await paint();
+  check(!alert() && checkbox('Keyboard').checked && actions().length === 0, 'Escape from the prompt keeps editing without losing changes.');
+  check(doc.activeElement === button('Cancel'), 'Dismissing the prompt restores the previous focus.');
+  key('Escape');
+  await prompt();
+
+  // The update alert must wait behind the close question, not cover it up.
+  host.send({ ...host.update, status: 'A newer version is ready.', canInstall: true, remoteVersion: '1.0.31', automatic: true });
+  await paint();
+  check(pendingPrompt() && !doc.querySelector('#update-alert-title') && actions().length === 0,
+    'An arriving update cannot replace the unsaved-changes question.');
+  await clickButton('Keep editing', alert());
+  check(doc.querySelector('#update-alert-title') && !pendingPrompt() &&
+    win.getComputedStyle(alert().parentElement).backgroundColor === overlayColor,
+    'The waiting update uses exactly the same overlay after Keep editing.');
+  const reopen = alert().querySelector('input');
+  reopen.click();
+  await paint();
+  nativeClose();
+  await prompt();
+  key('Escape');
+  await paint();
+  check(doc.querySelector('#update-alert-title') && alert().querySelector('input').checked,
+    'A native close preempts an update alert; Keep editing restores that alert and its one-time choice.');
+  key('Escape');
+  await paint();
+  check(!alert() && checkbox('Keyboard').checked && actions().length === 0 &&
+    host.messages.findLast(message => message.action === 'dismissUpdate'), 'Escape dismisses only the update alert and preserves unsaved device edits.');
+  check(host.errors.length === 0, 'Overlay and keyboard scenarios had no script errors.');
+  document.querySelector('#outcome').textContent = `Passed ${checks} configuration close checks.`;
+} catch (error) {
+  document.querySelector('#outcome').textContent = `FAILED: ${error.message}`;
+  document.querySelector('#outcome').className = 'fail';
+}
+</script>
+</html>

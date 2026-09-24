@@ -63,6 +63,7 @@ export type HostMessage =
   | { type: "deviceStatus"; deviceStatuses: DeviceStatus[] }
   // The resulting state after the host applies a Start with Windows change.
   | { type: "startWithWindows"; enabled: boolean }
+  | { type: "closeRequested" }
   | ({ type: "update" } & UpdateState);
 
 declare global {

@@ -27,6 +27,8 @@ namespace BluetoothBatteryMonitor
         private static readonly JsonSerializerOptions MessageOptions = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase };
         private System.Drawing.Icon? _dialogIcon;
         private bool _initialized;
+        private bool _configReady;
+        private bool _closeApproved;
         private readonly CancellationTokenSource _lifetime = new();
         private static Task<CoreWebView2Environment>? _environment;
         private static List<string> _cachedPairedNames = new();
@@ -115,6 +117,9 @@ namespace BluetoothBatteryMonitor
                     case "getInit":
                         HandleGetInit();
                         break;
+                    case "configReady":
+                        _configReady = true;
+                        break;
                     case "getDeviceStatus":
                         SendDeviceStatuses(force: true);
                         break;
@@ -174,6 +179,19 @@ namespace BluetoothBatteryMonitor
         {
             base.OnHandleCreated(e);
             ResizeClientArea(InitialClientHeight);
+        }
+
+        protected override void OnFormClosing(FormClosingEventArgs e)
+        {
+            base.OnFormClosing(e);
+            if (e.Cancel || e.CloseReason != CloseReason.UserClosing || !_configReady ||
+                _webView?.CoreWebView2 == null || _closeApproved || AppUpdater.Instance.Installing) return;
+
+            // X, Alt+F4 and the system menu must leave the window alive until
+            // the UI saves or explicitly approves closing. Startup failures,
+            // application exit and the updater handoff can still close normally.
+            e.Cancel = true;
+            SendMessage(new { type = "closeRequested" });
         }
 
         private void ResizeToContent(int contentHeight)
@@ -343,6 +361,8 @@ namespace BluetoothBatteryMonitor
 
         private void CloseAfterWebMessage(DialogResult result)
         {
+            // Save has completed, or the UI chose Discard/unchanged close.
+            _closeApproved = true;
             DialogResult = result;
             // A modeless Close disposes its controls immediately. Let WebView2
             // return from its message callback before disposing the browser.

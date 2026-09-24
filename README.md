@@ -30,6 +30,11 @@ On first launch, a sentinel battery icon appears in the tray. Right-click it and
 - **Double-click** any device icon to open Windows Bluetooth settings
 - **`--listdevices`** flag: shows all paired Bluetooth devices in a dialog and exits
 
+Closing configuration with an unsaved device selection asks **“Save changes
+before closing?”** over a dark overlay, with **Keep editing**, **Discard**, and
+**Save**. This covers Cancel, X, Alt+F4, and Escape. Keep editing (or Escape in
+the prompt) preserves the selection; Discard closes without saving it.
+
 **Start with Windows**, above **Automatically check for updates** in
 configuration, adds or removes a `BluetoothBatteryMonitor` value under
 `HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Run` that launches
@@ -138,7 +143,11 @@ serve the repository with `python3 -m http.server 8782 --bind 127.0.0.1`, and op
 WebView host to check immediate update/cancel feedback, delayed device discovery,
 selection preservation, live download percentage, per-update reopening, checkbox alignment,
 battery trend graphs with offline shading, and scrolling.
-Native WebView2 startup and the installer handoff still require Windows verification.
+Open `http://127.0.0.1:8782/tests/config-close.html` for unsaved-change prompts,
+close requests, save/discard behavior, reverted edits, focus, keyboard handling,
+overlay styling, and overlapping update alerts.
+Native WebView2 startup, X/Alt+F4 interception, and the installer handoff still
+require Windows verification.
 
 On Windows, run `dotnet run --project tests/windows/TrayIconRendering.Tests.csproj -c Release`
 to check native icon dimensions, transparency, original pixels after DPI round trips,
