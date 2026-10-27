@@ -66,7 +66,7 @@ window.addEventListener('message', event => {
   if (event.source === frame.contentWindow && event.data.testHeight) frame.style.height = `${Math.min(560, event.data.testHeight)}px`;
 });
 try {
-  const html = await (await fetch('../assets/dist/index.html')).text();
+  const html = await (await fetch('../assets/dist/index.html', { cache: 'no-store' })).text();
   frame.srcdoc = html.replace('<head>', `<head><script>(${mockHost.toString()})();<\/script>`);
   await wait(() => frame.contentDocument.querySelector('button'));
   const doc = frame.contentDocument;
@@ -200,9 +200,32 @@ try {
   // Offline periods: light red behind the battery line.
   const since = time => new frame.contentWindow.Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }).format(time);
   const period = (from, to, reason = 'disconnected') => ({ from: new Date(from).toISOString(), to: to === null ? null : new Date(to).toISOString(), reason });
-  const shades = name => [...graph(name).querySelectorAll('linearGradient stop')].map(stop => Number(stop.getAttribute('stop-opacity')));
   const gapTitles = name => [...graph(name).querySelectorAll('rect[data-gap] title')].map(title => title.textContent);
   const offlineLine = name => description(name).split('\n')[1];
+  // Check rendered pixels: smoothing must never tint connected time on either
+  // side of an outage, including at fractional Windows display scales.
+  const rasterGraph = async (name, scale = 1, withoutOffline = false) => {
+    const svg = graph(name).cloneNode(true);
+    if (withoutOffline) svg.querySelectorAll('[data-offline]').forEach(node => node.remove());
+    const image = new Image();
+    image.src = `data:image/svg+xml;charset=utf-8,${encodeURIComponent(new XMLSerializer().serializeToString(svg))}`;
+    await image.decode();
+    const canvas = document.createElement('canvas');
+    canvas.width = 136 * scale; canvas.height = 28 * scale;
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#fff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    return x => [...context.getImageData(Math.floor(x * scale), Math.floor(20 * scale), 1, 1).data];
+  };
+  const checkClearColumns = async (name, columns, label) => {
+    for (const scale of [1, 1.25, 1.5, 2]) {
+      const rendered = await rasterGraph(name, scale);
+      const plain = await rasterGraph(name, scale, true);
+      check(columns.every(x => rendered(x).every((channel, i) => channel === plain(x)[i])),
+        `${label}: connected time has no red pixels at ${scale * 100}% scale.`);
+    }
+  };
   host.send({ type: 'deviceStatus', deviceStatuses: [
     { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(now - 4 * HOUR, 80), reading(now - HOUR, 67)],
       offline: [period(now - 3 * HOUR, now - 2 * HOUR)], connectionHistoryStart: new Date(now - 10 * HOUR).toISOString() },
@@ -210,33 +233,38 @@ try {
       offline: [period(now - 9 * HOUR, now - 8.5 * HOUR, 'unmonitored'), period(now - 5 * HOUR, null)],
       connectionHistoryStart: new Date(now - 12 * HOUR).toISOString() },
   ] });
-  await wait(() => graph('Mouse')?.querySelector('rect[data-offline]') && graph('Headphones')?.querySelector('rect[data-offline]'));
-  const band = graph('Mouse').querySelector('rect[data-offline]');
-  const gradientId = band.getAttribute('fill').match(/^url\(#(.+)\)$/)?.[1];
-  check(gradientId && graph('Mouse').querySelector('linearGradient').id === gradientId && shades('Mouse').length === 136 &&
-    band.getAttribute('y') === '4' && band.getAttribute('height') === '20' && band.getAttribute('width') === '136',
-    'Offline time is one shaded band between the 0% and 100% hairlines, with a shade for each pixel column.');
-  check(gradientId !== graph('Headphones').querySelector('linearGradient').id, 'Each graph uses its own shading.');
-  check(shades('Mouse')[50] === 1 && shades('Mouse')[10] === 0 && shades('Mouse')[100] === 0 &&
-    shades('Mouse').slice(35, 67).every(shade => shade === 1), 'A disconnection is solid red for exactly its time on the axis.');
-  const mouseParts = [...graph('Mouse').children].map(node => node.tagName.toLowerCase());
-  check(mouseParts.indexOf('rect') > mouseParts.indexOf('path') && mouseParts.lastIndexOf('path') > mouseParts.indexOf('rect'),
+  await wait(() => graph('Mouse')?.querySelector('[data-offline]') && graph('Headphones')?.querySelector('[data-offline]'));
+  const band = graph('Mouse').querySelector('[data-offline]');
+  const bandBounds = band.getBBox();
+  check(Math.abs(bandBounds.x - 34) < 0.01 && Math.abs(bandBounds.width - 34) < 0.01 && bandBounds.y === 4 && bandBounds.height === 20,
+    'The outage band spans only its recorded interval between the 0% and 100% hairlines.');
+  const mousePixels = await rasterGraph('Mouse');
+  const headphonePixels = await rasterGraph('Headphones');
+  const isRed = pixel => pixel.join(',') === '254,202,202,255';
+  check(!isRed(mousePixels(18)) && isRed(headphonePixels(18)) && isRed(mousePixels(50)) && !isRed(headphonePixels(50)),
+    'Each graph shades its own outage intervals independently.');
+  check(Array.from({ length: 32 }, (_, i) => 35 + i).every(x => isRed(mousePixels(x))),
+    'A resolved disconnection is solid light red throughout its recorded interval.');
+  const mouseParts = [...graph('Mouse').children];
+  check(mouseParts.indexOf(band) > mouseParts.indexOf(graph('Mouse').querySelector('path')) &&
+    mouseParts.indexOf(graph('Mouse').querySelector('path[stroke]')) > mouseParts.indexOf(band),
     'Offline shading covers the battery area but stays under the line.');
-  check(graph('Mouse').querySelector('linearGradient stop').getAttribute('stop-color') === '#fecaca', 'Offline time is light red.');
+  check(band.getAttribute('fill') === '#fecaca', 'Offline time is light red.');
+  await checkClearColumns('Mouse', [10, 20, 80, 100, 120], 'One closed outage');
   check(gapTitles('Mouse').length === 1 && gapTitles('Mouse')[0].startsWith('Disconnected · ') && gapTitles('Mouse')[0].endsWith(' · 1 h'),
     'Hovering a disconnection shows when it happened and for how long.');
   check(offlineLine('Mouse') === 'Offline once, 1 h in total' && graph('Mouse').parentElement.title === description('Mouse'),
     'The graph tooltip adds how often and how long the device was offline.');
   check([...graph('Mouse').querySelectorAll('circle')].every(circle => circle.getAttribute('cx') === '136' && !circle.getAttribute('stroke')),
     'A connected device still ends with a solid dot on its current level at the present.');
-  const headphonePath = graph('Headphones').querySelectorAll('path');
+  const headphonePath = graph('Headphones').querySelectorAll('path:not([data-offline])');
   check(graphLabels('Headphones') === hourLabels([now - 10 * HOUR, now - 5 * HOUR, now]) &&
     headphonePath[1].getAttribute('d') === 'M0.0 5.6 L54.4 9.8' && headphonePath[0].getAttribute('d').endsWith('L54.4 24.5 L0 24.5 Z'),
     'A current disconnection extends the axis to the present while the line stops at the last reading.');
   const ring = [...graph('Headphones').querySelectorAll('circle')].find(circle => circle.getAttribute('stroke'));
   check(ring && Number(ring.getAttribute('cx')).toFixed(1) === '54.4' && ring.getAttribute('fill') === '#fff',
     'The last known level before going offline is a ring, not a live dot.');
-  check(shades('Headphones').slice(69).every(shade => shade === 1) && shades('Headphones')[60] === 0 && shades('Headphones')[18] === 1,
+  check([70, 100, 130].every(x => isRed(headphonePixels(x))) && headphonePixels(60).join(',') === '255,255,255,255' && isRed(headphonePixels(18)),
     'The current disconnection is shaded to the present, separately from earlier offline time.');
   check(offlineLine('Headphones') === `Disconnected since ${since(now - 5 * HOUR)} · offline 2 times, 5 h 30 min in total`,
     'The tooltip says since when the device has been disconnected.');
@@ -244,26 +272,47 @@ try {
     gapTitles('Headphones')[1] === `Disconnected since ${since(now - 5 * HOUR)} · 5 h`,
     'Time when nothing was monitored is explained separately from a disconnection.');
 
-  // Many short drop-outs: an even tint, not a comb of slivers.
+  // Subpixel drop-outs still appear at their true coverage, without blurring.
   const dropouts = Array.from({ length: 300 }, (_, index) => period(now - 70 * HOUR + index * 14 * 60e3, now - 70 * HOUR + index * 14 * 60e3 + 3 * 60e3));
   host.send({ type: 'deviceStatus', deviceStatuses: [
     { name: 'Mouse', online: true, batteryLevel: 83, trend: [reading(now - 72 * HOUR, 95), reading(now - HOUR, 83)],
       offline: dropouts, connectionHistoryStart: new Date(now - 96 * HOUR).toISOString() },
   ] });
   await wait(() => offlineLine('Mouse')?.startsWith('Offline 300 times'));
-  const dense = shades('Mouse').slice(8, 128);
-  const steps = dense.slice(1).map((shade, index) => Math.abs(shade - dense[index]));
-  check(dense.every(shade => shade > 0.25 && shade < 0.6) && Math.max(...steps) < 0.1,
-    'Frequent short drop-outs blend into an even, lighter tint without stripes.');
+  const densePixels = await rasterGraph('Mouse');
+  const dense = Array.from({ length: 120 }, (_, i) => densePixels(i + 8));
+  check(dense.every(pixel => pixel[0] > 234 && pixel[1] < 242 && pixel[1] > 202),
+    'Frequent subpixel drop-outs remain visible with lighter coverage than a continuous outage.');
   check(gapTitles('Mouse').length === 0 && offlineLine('Mouse') === 'Offline 300 times, 15 h in total',
     'Drop-outs too narrow to point at are summarised in the tooltip instead.');
+
+  // A short outage late in a long discharge must not tint the rest of the plot.
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(now - 50 * DAY, 95), reading(now - DAY, 67)],
+      offline: [period(now - 14 * DAY, now - 14 * DAY + HOUR)], connectionHistoryStart: new Date(now - 60 * DAY).toISOString() },
+  ] });
+  await wait(() => offlineLine('Mouse') === 'Offline once, 1 h in total');
+  await checkClearColumns('Mouse', [10, 80, 110, 120, 130], 'One subpixel outage in a 50-day graph');
+  await checkClearColumns('Mouse', [94, 95, 96, 99, 100, 101], 'Connected time beside that subpixel outage');
+
+  // On a long history, smearing each brief outage across neighbouring columns
+  // makes separate events look like a continuous outage after the first one.
+  const longStart = now - 50 * DAY;
+  const timeAtColumn = column => longStart + column / 136 * 50 * DAY;
+  host.send({ type: 'deviceStatus', deviceStatuses: [
+    { name: 'Mouse', online: true, batteryLevel: 67, trend: [reading(longStart, 95), reading(now - DAY, 67)],
+      offline: Array.from({ length: 20 }, (_, i) => period(timeAtColumn(40.25 + 4 * i), timeAtColumn(40.5 + 4 * i))),
+      connectionHistoryStart: new Date(now - 60 * DAY).toISOString() },
+  ] });
+  await wait(() => offlineLine('Mouse')?.startsWith('Offline 20 times'));
+  await checkClearColumns('Mouse', [10, 38, 42, 46, 62, 78, 94, 110, 118, 124, 130], 'Separate brief outages in a 50-day graph');
 
   host.send({ type: 'deviceStatus', deviceStatuses: [
     { name: 'Mouse', online: true, batteryLevel: 70, trend: [reading(now - 10 * HOUR, 80), reading(now - HOUR, 70)],
       offline: [], connectionHistoryStart: new Date(now - 2 * HOUR).toISOString() },
   ] });
   await wait(() => offlineLine('Mouse')?.startsWith('No disconnections'));
-  check(offlineLine('Mouse') === `No disconnections since ${since(now - 2 * HOUR)}` && !graph('Mouse').querySelector('rect[data-offline]'),
+  check(offlineLine('Mouse') === `No disconnections since ${since(now - 2 * HOUR)}` && !graph('Mouse').querySelector('[data-offline]'),
     'Before recording began nothing is known, so the tooltip says since when connections are covered.');
   host.send({ type: 'deviceStatus', deviceStatuses: [] });
   await wait(() => statusOf('Mouse') === '');

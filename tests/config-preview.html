@@ -30,7 +30,9 @@ const feedback = document.querySelector('#feedback');
 // ?zoom=3 enlarges the preview to inspect the graphs up close.
 const zoom = Number(new URLSearchParams(location.search).get('zoom'));
 if (zoom > 0) document.querySelector('main').style.zoom = zoom;
-function mockHost(version) {
+const outages = new URLSearchParams(location.search).has('outages');
+if (outages) document.querySelector('.note').textContent = 'Configuration preview · Isolated and recurring short outages';
+function mockHost(version, outages) {
   const listeners = new Set();
   const chargeAt = (daysAgo, hour, minute) => {
     const date = new Date();
@@ -82,6 +84,22 @@ function mockHost(version) {
       trend: [hoursAgo(120, 100), hoursAgo(96, 90), hoursAgo(80, 70), hoursAgo(60, 60), hoursAgo(50, 40)],
       offline: [gap(118, 100), gap(94, 82), gap(78, 62), gap(58, 51), gap(49.5, null)] },
   ];
+  if (outages) {
+    const now = Date.now();
+    const span = 50 * 864e5;
+    const atColumn = column => new Date(now - span + column / 136 * span).toISOString();
+    const trend = [
+      { observedAt: atColumn(0), percentage: 95 },
+      { observedAt: atColumn(70), percentage: 80 },
+      { observedAt: atColumn(100), percentage: 67 },
+    ];
+    deviceStatuses.splice(0, deviceStatuses.length, ...[
+      { name: 'One short outage', offline: [{ from: atColumn(97.9), to: atColumn(98.1), reason: 'disconnected' }] },
+      { name: 'Separate short outages', offline: Array.from({ length: 20 }, (_, i) =>
+        ({ from: atColumn(40.25 + 4 * i), to: atColumn(40.5 + 4 * i), reason: 'disconnected' })) },
+    ].map(device => ({ ...device, online: true, batteryLevel: 67, trend, connectionHistoryStart: atColumn(0) })));
+    devices.splice(0, devices.length, ...deviceStatuses.map(device => ({ name: device.name, isConfigured: true })));
+  }
   const send = data => listeners.forEach(listener => listener({ data }));
   const update = { type: 'update', status: '', busy: false, installing: false, canInstall: false, automatic: false, currentVersion: version };
   const tell = previewMessage => parent.postMessage({ previewMessage }, '*');
@@ -115,10 +133,10 @@ window.addEventListener('message', event => {
 });
 try {
   const [html, manifest] = await Promise.all([
-    fetch('../assets/dist/index.html').then(response => { if (!response.ok) throw new Error('Build the frontend first.'); return response.text(); }),
-    fetch('../assets/package.json').then(response => response.json()),
+    fetch('../assets/dist/index.html', { cache: 'no-store' }).then(response => { if (!response.ok) throw new Error('Build the frontend first.'); return response.text(); }),
+    fetch('../assets/package.json', { cache: 'no-store' }).then(response => response.json()),
   ]);
-  frame.srcdoc = html.replace('<head>', `<head><script>(${mockHost.toString()})(${JSON.stringify(manifest.version)});<\/script>`);
+  frame.srcdoc = html.replace('<head>', `<head><script>(${mockHost.toString()})(${JSON.stringify(manifest.version)}, ${outages});<\/script>`);
 } catch (error) { feedback.textContent = String(error); }
 </script>
 </html>

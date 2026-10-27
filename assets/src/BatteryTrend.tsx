@@ -1,4 +1,3 @@
-import { useId } from "react";
 import type { BatteryReading, OfflinePeriod } from "./lib/bridge";
 
 // Sized to sit beside a device name inside the 420px dialog.
@@ -13,14 +12,6 @@ const LINE = "#2a78d6";
 // A light red, drawn over the battery area so offline time has one colour
 // whether or not the line runs through it.
 const OFFLINE = "#fecaca";
-// Offline time is shaded per pixel column by the share of that column's time
-// the device was offline. Gaps a few pixels wide keep crisp edges and read as
-// solid bands. Narrower ones are blurred into an even tint: a device that drops
-// out every few minutes would otherwise draw a comb of slivers that shifts with
-// the scale. The curve lifts that tint enough to notice without letting it
-// look like a long gap.
-const OFFLINE_CURVE = 0.6;
-const BLUR = [1, 2, 3, 4, 3, 2, 1].map((weight) => weight / 16);
 // Shading fills the plot between the 100% and 0% hairlines.
 const BAND_TOP = 4;
 const BAND_HEIGHT = 20;
@@ -113,7 +104,6 @@ function describeOffline(gaps: Gap[], start: number, end: number, historyStart: 
 // since it began: how quickly the battery is falling or rising, and when the
 // device was offline.
 export default function BatteryTrend({ readings, online, batteryLevel, now, offline, connectionHistoryStart }: Props) {
-  const gradient = `offline-${useId().replace(/[^\w-]/g, "")}`;
   const points: Point[] = (readings ?? [])
     .map((reading) => ({ time: Date.parse(reading.observedAt), level: reading.percentage }))
     .filter((point) => Number.isFinite(point.time) && Number.isInteger(point.level) && point.level > 0 && point.level <= 100)
@@ -144,28 +134,16 @@ export default function BatteryTrend({ readings, online, batteryLevel, now, offl
   const x = (time: number) => ((time - first.time) / domain) * WIDTH;
   const y = (level: number) => INSET + ((100 - level) / 100) * (HEIGHT - 2 * INSET);
 
-  const crisp = new Array<number>(WIDTH).fill(0);
-  const brief = new Array<number>(WIDTH).fill(0);
-  for (const gap of gaps) {
+  const bands = gaps.flatMap((gap) => {
     const left = Math.max(0, x(gap.from));
     const right = Math.min(WIDTH, x(gap.to));
-    // Crispness rises from none at one pixel wide to full at three, so a gap
-    // does not jump in weight as it lengthens.
-    const crispness = Math.min(1, Math.max(0, (right - left - 1) / 2));
-    for (let column = Math.floor(left); column < right; column++) {
-      const share = Math.min(right, column + 1) - Math.max(left, column);
-      crisp[column] += share * crispness;
-      brief[column] += share * (1 - crispness);
-    }
-  }
-  const radius = (BLUR.length - 1) / 2;
-  const shades = crisp.map((share, column) => {
-    let blurred = 0;
-    for (let offset = -radius; offset <= radius; offset++)
-      blurred += brief[Math.min(WIDTH - 1, Math.max(0, column + offset))] * BLUR[offset + radius];
-    const offline = Math.min(1, share + blurred);
-    return offline > 0.002 ? Number((offline ** OFFLINE_CURVE).toFixed(3)) : 0;
+    return right > left ? [{ gap, left, right }] : [];
   });
+  // Draw only recorded intervals. Blurring short gaps across nearby columns
+  // smeared red into connected time, especially on long histories. Keep
+  // subpixel boundaries; one compound path also avoids thousands of SVG nodes.
+  const offlinePath = bands.map(({ left, right }) =>
+    `M${left} ${BAND_TOP}H${right}V${BAND_TOP + BAND_HEIGHT}H${left}Z`).join(" ");
 
   const lineEnd = x(end.time);
   const line = points.map((point, index) => `${index === 0 ? "M" : "L"}${x(point.time).toFixed(1)} ${y(point.level).toFixed(1)}`).join(" ");
@@ -182,28 +160,18 @@ export default function BatteryTrend({ readings, online, batteryLevel, now, offl
         <line x1={0} y1={y(100)} x2={WIDTH} y2={y(100)} stroke="#e5e5e5" />
         <line x1={0} y1={y(0)} x2={WIDTH} y2={y(0)} stroke="#e5e5e5" />
         <path d={`${line} L${lineEnd.toFixed(1)} ${y(0)} L0 ${y(0)} Z`} fill={LINE} fillOpacity={0.1} />
-        {shades.some((shade) => shade > 0) && <>
-          {/* One stop per pixel column, sampled at its centre. */}
-          <linearGradient id={gradient} gradientUnits="userSpaceOnUse" x1={0} y1={0} x2={WIDTH} y2={0}>
-            {shades.map((shade, column) => <stop key={column} offset={(column + 0.5) / WIDTH} stopColor={OFFLINE} stopOpacity={shade} />)}
-          </linearGradient>
-          <rect x={0} y={BAND_TOP} width={WIDTH} height={BAND_HEIGHT} fill={`url(#${gradient})`} data-offline="" />
-        </>}
+        {offlinePath && <path d={offlinePath} fill={OFFLINE} data-offline="" />}
         <path d={line} fill="none" stroke={LINE} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
         <circle cx={lineEnd} cy={y(end.level)} r={4.5} fill="#fff" />
         {/* A filled dot is the current level; a ring is the last level known before going offline. */}
         {live
           ? <circle cx={lineEnd} cy={y(end.level)} r={3} fill={LINE} />
           : <circle cx={lineEnd} cy={y(end.level)} r={2.75} fill="#fff" stroke={LINE} strokeWidth={1.5} />}
-        {gaps.map((gap) => {
-          const left = Math.max(0, x(gap.from));
-          const right = Math.min(WIDTH, x(gap.to));
-          return right - left >= HOVER_WIDTH && (
-            <rect key={`${gap.from}-${gap.to}`} x={left} y={BAND_TOP} width={right - left} height={BAND_HEIGHT} fill="transparent" data-gap="">
-              <title>{describeGap(gap, now)}</title>
-            </rect>
-          );
-        })}
+        {bands.map(({ gap, left, right }) => right - left >= HOVER_WIDTH && (
+          <rect key={`${gap.from}-${gap.to}`} x={left} y={BAND_TOP} width={right - left} height={BAND_HEIGHT} fill="transparent" data-gap="">
+            <title>{describeGap(gap, now)}</title>
+          </rect>
+        ))}
       </svg>
       <div aria-hidden="true" className="grid grid-cols-3 text-[10px] leading-3 text-neutral-500 whitespace-nowrap">
         <span>{labels[0]}</span>

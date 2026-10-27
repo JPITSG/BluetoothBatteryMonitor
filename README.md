@@ -93,10 +93,10 @@ usable readings show no graph. Zero readings are never plotted.
 
 Time a device was offline is shaded **light red** behind the line: disconnected,
 or not monitored while the PC was asleep or off or the app was closed. App
-restarts shorter than two minutes are not shown. Each pixel column is shaded by
-how much of its time was offline, so long periods are solid bands while frequent
-short drop-outs blend into an even, lighter tint instead of a comb of slivers. A
-current disconnection extends the graph to the present. Hovering an offline period
+restarts shorter than two minutes are not shown. Shading stays within each
+recorded outage. Short drop-outs retain their actual width, even below one pixel,
+without blurring red into connected time on either side. A current disconnection
+extends the graph to the present. Hovering an offline period
 a few pixels wide or more shows when it happened and for how long, and the graph's
 tooltip adds how many times and how long the device was offline in total, and
 since when it has been disconnected.
@@ -113,7 +113,8 @@ For a dummy-data configuration preview, build the frontend and open
 `http://127.0.0.1:8782/tests/config-preview.html` using the local server described
 below. It uses the real built modal and simulated devices, without changing
 settings or writing any history. Add `?zoom=3` to the address to inspect the
-graphs up close.
+graphs up close. Add `?outages&zoom=2` to compare isolated and recurring short
+outages over a 50-day graph.
 
 ## Prerequisites
 

@@ -85,7 +85,7 @@ const prompt = async () => {
   check(actions().length === 0, 'A refused close sends neither a save nor a close command.');
 };
 try {
-  const response = await fetch('../assets/dist/index.html');
+  const response = await fetch('../assets/dist/index.html', { cache: 'no-store' });
   if (!response.ok) throw new Error('Build the frontend first.');
   const html = await response.text();
   const reset = async () => {
